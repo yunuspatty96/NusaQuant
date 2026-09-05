@@ -65,13 +65,27 @@ UNIVERSE_LABEL = "NusaQuant Liquid IDX Universe (market cap > IDR 1T)"
 # PLANNING
 # ══════════════════════════════════════════════════════════════════════
 
+def cached_universe_size(base: str = "data") -> int:
+    """Companies already bought and complete on disk. They cost nothing."""
+    return len([t for t in nq.cached_tickers("quarterly", base)
+                if nq.is_cached(t, "prices", base)])
+
+
 def plan_run(quarters: int, budget: int, companies: int | None,
-             reserve: int = RESERVE_FOR_APP) -> dict:
+             reserve: int = RESERVE_FOR_APP, cached: int = 0) -> dict:
     """Work out the price window and universe size that fit the budget.
 
     The price window is DERIVED from ``quarters``, never set by hand. Fetching
     price history older than the oldest fundamental is pure waste — there is no
     observation to pair it with.
+
+    The budget buys COMPANIES THAT ARE NOT YET CACHED. Sizing the universe as
+    though the cache were empty is what made a second run buy nothing: with 15
+    companies already on disk and a budget covering 13, the planner set the
+    universe to 13, took the first 13 of the cached 15, and reported a full
+    collection having spent nothing and added nothing. Worse, the two it
+    dropped held the longest price history in the panel. Money already spent is
+    not part of the decision about money still to spend.
     """
     observations = max(1, quarters - 7)      # 4 quarters for TTM, 4 for growth
     # The window must reach back to the FIRST report we fetch, not merely to
@@ -82,8 +96,11 @@ def plan_run(quarters: int, budget: int, companies: int | None,
     per_ticker = quarters + requests_per_ticker
 
     spendable = budget - reserve - 1          # -1 for the universe screener
-    fits = max(0, spendable // per_ticker)
-    universe_size = min(companies, fits) if companies else fits
+    affordable_new = max(0, spendable // per_ticker)
+    universe_size = cached + affordable_new
+    if companies:
+        universe_size = min(companies, universe_size)
+    new_companies = max(0, universe_size - cached)
 
     end = date.today()
     start = end - timedelta(days=span_days)
@@ -95,8 +112,10 @@ def plan_run(quarters: int, budget: int, companies: int | None,
         "price_years": round(span_days / 365, 1),
         "requests_per_ticker": requests_per_ticker,
         "per_ticker": per_ticker,
+        "cached_companies": cached,
+        "new_companies": new_companies,
         "universe_size": universe_size,
-        "estimated_total": universe_size * per_ticker + 1,
+        "estimated_total": new_companies * per_ticker + 1,
         "estimated_rows": universe_size * observations,
         "budget": budget,
         "reserve": reserve,
@@ -114,6 +133,8 @@ def print_plan(plan: dict) -> None:
           f"({plan['price_years']} years)")
     print(f"  Cost per company    : {plan['quarters']} quarters + "
           f"{plan['requests_per_ticker']} price = {plan['per_ticker']} credits")
+    print(f"  Already cached      : {plan['cached_companies']} companies (free)")
+    print(f"  New to buy          : {plan['new_companies']} companies")
     print(f"  Universe size       : {plan['universe_size']} companies")
     print(f"  ESTIMATED SPEND     : ~{plan['estimated_total']:,} credits")
     print(f"  Expected dataset    : ~{plan['estimated_rows']:,} rows")
@@ -123,6 +144,23 @@ def print_plan(plan: dict) -> None:
 # ══════════════════════════════════════════════════════════════════════
 # COLLECTION
 # ══════════════════════════════════════════════════════════════════════
+
+def _prioritise_cached(universe: pd.DataFrame, target: int) -> pd.DataFrame:
+    """Trim to ``target``, but never by discarding a company already bought.
+
+    Cached companies are free and their history is often the deepest in the
+    panel, so they go to the front of the queue and the budget fills the rest.
+    Cutting the list with a plain ``head`` once cost this project its two
+    longest price series.
+    """
+    if universe.empty:
+        return universe
+    cached = set(nq.cached_tickers("quarterly"))
+    is_cached = universe["symbol"].map(nq.normalise_symbol).isin(cached)
+    already, fresh = universe[is_cached], universe[~is_cached]
+    room = max(0, target - len(already))
+    return pd.concat([already, fresh.head(room)], ignore_index=True)
+
 
 def collect_offline():
     """Rebuild the universe and panel purely from ``data/cache/``.
@@ -155,17 +193,23 @@ def collect_offline():
 
 def collect(api_key: str, plan: dict, force: bool = False):
     """Fetch the universe, then each company — reusing the cache throughout."""
+    target = plan["universe_size"]
     universe = pd.DataFrame() if force else nq.load_universe()
-    if universe.empty or len(universe) < plan["universe_size"]:
+    if universe.empty or len(universe) < target:
         print("\nFetching universe…")
-        universe = nq.get_companies(api_key, where=UNIVERSE_FILTER,
-                                    limit=plan["universe_size"])
-        if universe.empty:
+        screened = nq.get_companies(api_key, where=UNIVERSE_FILTER, limit=target)
+        if screened.empty:
             raise SystemExit("The Sectors screener returned no companies.")
+        # Keep whatever the previous screen returned. A later screen can drop a
+        # company that has since fallen below the market-cap filter, and its
+        # data is already bought and paid for.
+        universe = (screened if universe.empty else
+                    pd.concat([universe, screened], ignore_index=True)
+                      .drop_duplicates(subset=["symbol"], keep="first"))
         nq.cache_universe(universe)
     else:
         print("\nUniverse loaded from cache (0 credits).")
-        universe = universe.head(plan["universe_size"])
+    universe = _prioritise_cached(universe, target)
     print(f"  {len(universe)} companies")
 
     quarterly, prices, failures = {}, {}, []
@@ -615,8 +659,16 @@ def main() -> int:
         universe, quarterly, prices = collect_offline()
         return train_from(universe, quarterly, prices, meter)
 
-    plan = plan_run(args.quarters, args.budget, args.companies, args.reserve)
+    plan = plan_run(args.quarters, args.budget, args.companies, args.reserve,
+                    cached=0 if args.force else cached_universe_size())
     print_plan(plan)
+
+    if plan["new_companies"] == 0 and plan["cached_companies"] > 0:
+        print("\nThis budget buys no company that is not already cached.")
+        print("Nothing would change, so nothing is fetched. Either raise "
+              "--budget, or lower --quarters to make each company cheaper.")
+        print("To re-train on what is already on disk: python train.py --offline")
+        return 1
 
     if plan["universe_size"] < 5:
         print("\nThis budget is too small for a meaningful study "
