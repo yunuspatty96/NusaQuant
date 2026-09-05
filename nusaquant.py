@@ -1914,6 +1914,113 @@ def explain_reliability(label: str, horizon: str) -> str:
             f"{label.lower()} reliability.")
 
 
+#: One tooltip per figure the dashboard puts a label on. They live here with
+#: the rest of the prose because a reader deciding whether to trust a number
+#: needs to know what it measures, and a label alone rarely says.
+TOOLTIPS: dict[str, str] = {
+    # — profile —
+    "latest_close":
+        "The last closing price in the data being shown. In cached mode that "
+        "is the snapshot date printed at the top of the page, not today.",
+    "market_cap":
+        "Closing price times shares outstanding on the same day. Every "
+        "valuation ratio on this page is built from this figure rather than "
+        "from a share count, so splits and rights issues cannot distort them.",
+    "probability":
+        "The machine learning model's estimated probability that this stock's "
+        "return is above zero over the horizon. It is a probability of "
+        "direction, not a forecast return and not a price target. Read the "
+        "reliability figure below it before treating it as a signal.",
+
+    # — technical state —
+    "trend":
+        "Price against its own 50- and 200-day averages. Above both is an "
+        "uptrend and below both a downtrend; above the 50 but under the 200 is "
+        "recovering, and the reverse is weakening. Descriptive of what the "
+        "price has done, not a forecast.",
+    "rsi":
+        "Relative Strength Index over 14 days, on Wilder's smoothing. Above 70 "
+        "is conventionally read as overbought and below 30 as oversold, with "
+        "neutral in between. A stretched reading is not a signal to act on: "
+        "prices can stay overbought for months.",
+    "macd":
+        "Moving Average Convergence Divergence, 12/26/9. The figure is the "
+        "histogram — the MACD line less its signal line. Above zero the "
+        "shorter average is pulling ahead of the longer one, below zero it is "
+        "falling behind. The chart above shows all three.",
+    "from_52w_high":
+        "How far the last close sits below the highest close of the past 52 "
+        "weeks. Zero means the stock is at its own one-year peak; -30% means "
+        "it would need to rise about 43% to return there.",
+    "return_6m":
+        "Price change over the last 126 trading days — six months of actual "
+        "IDX sessions, not calendar months. This is what already happened, and "
+        "is not an input to the model.",
+    "return_12m":
+        "Price change over the last 252 trading days. As above: history, not "
+        "a forecast, and not something the model reads.",
+
+    # — outlook —
+    "reliability":
+        "A 0-100 score from out-of-sample validation: 40% rank quality, 25% "
+        "precision against the base rate, 20% calibration against the "
+        "prior-only baseline, 15% fold-to-fold stability. \"No measurable "
+        "edge\" means the model did not out-rank a coin flip by enough to "
+        "report, and its probabilities are shrunk toward the historical base "
+        "rate as a result.",
+    "roc_auc":
+        "How often the model ranked a winner above a loser, averaged within "
+        "each validation fold. 0.50 is a coin flip and 1.00 is perfect. "
+        "Averaged inside folds and never pooled across them: the share of "
+        "stocks that rose swings from 0% to 100% between quarters, and pooling "
+        "lets that swing masquerade as stock-picking skill.",
+    "folds":
+        "How many purged walk-forward folds the scores are measured over, one "
+        "per quarterly rebalance. A row joins the training set only once its "
+        "own forward window has closed, so nothing the model learned from had "
+        "resolved after the period it is being tested on.",
+    "data_quality":
+        "The share of the model's own inputs that are present for this "
+        "company. It is not model reliability: complete data fed to a model "
+        "with no edge is still an answer with no edge.",
+
+    # — historical risk —
+    "risk_band":
+        "A 0-100 blend of volatility, drawdown, downside volatility and "
+        "liquidity, placed in a band. Measured from price history alone and "
+        "kept separate from every probability above, because a stock can be "
+        "likely to rise and violently volatile at the same time.",
+    "volatility":
+        "Standard deviation of daily returns scaled to a year. Higher means "
+        "the price moved more — in both directions, not only down.",
+    "max_drawdown":
+        "The deepest fall from a previous peak inside the window: what someone "
+        "who bought at the worst moment would have sat through before any "
+        "recovery.",
+    "downside_volatility":
+        "Volatility computed from losing days only. Two stocks can share an "
+        "annualised volatility while one of them mostly moved upward, and this "
+        "separates them.",
+    "turnover":
+        "Median daily traded value as a share of market capitalisation. Thin "
+        "trading is itself a risk: it is what makes a position hard to leave "
+        "at the price on the screen.",
+
+    # — ranking table —
+    "rank":
+        "Position by the machine learning model's estimated probability, "
+        "highest first.",
+    "ticker":
+        "IDX ticker symbol.",
+    "company":
+        "Registered company name as filed with IDX.",
+    "risk_column":
+        "Historical risk band, ranked against the other companies in this "
+        "table rather than against a fixed threshold, so \"High\" means high "
+        "relative to these peers.",
+}
+
+
 EXPLANATIONS = {
     "probability": ("The percentage is the machine learning model's estimated "
                     "probability that the "

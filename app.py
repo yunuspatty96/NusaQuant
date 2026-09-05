@@ -560,8 +560,10 @@ def render_profile(company: dict, predictions: dict) -> None:
 
     columns = st.columns(4)
     columns[0].metric("Latest close",
-                      nq.format_rupiah(overview.get("last_close_price"), compact=False))
-    columns[1].metric("Market cap", nq.format_rupiah(overview.get("market_cap")))
+                      nq.format_rupiah(overview.get("last_close_price"), compact=False),
+                      help=nq.TOOLTIPS["latest_close"])
+    columns[1].metric("Market cap", nq.format_rupiah(overview.get("market_cap")),
+                      help=nq.TOOLTIPS["market_cap"])
     for column, horizon in ((columns[2], "6m"), (columns[3], "12m")):
         result = predictions.get(horizon, {})
         # Spelled out rather than left as "6M probability": the horizon alone
@@ -569,7 +571,8 @@ def render_profile(company: dict, predictions: dict) -> None:
         # reader must not guess at.
         label = f"{'6' if horizon == '6m' else '12'}M probability of positive return"
         if result.get("available"):
-            column.metric(label, f"{result['probability'] * 100:.0f}%")
+            column.metric(label, f"{result['probability'] * 100:.0f}%",
+                          help=nq.TOOLTIPS["probability"])
         else:
             # Never a bare dash: an unavailable probability has a cause, and
             # the cause is more useful than the punctuation.
@@ -741,26 +744,23 @@ def render_technical(technical: dict, window: str) -> None:
     columns = st.columns(6)
 
     tile(columns[0], "Trend", technical["trend"], technical["trend"],
-         "Price against its own 50- and 200-day averages. Above both is an "
-         "uptrend and below both a downtrend; above the 50 but under the 200 "
-         "is recovering, and the reverse is weakening.")
+         nq.TOOLTIPS["trend"])
     tile(columns[1], "RSI (14)",
          f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
-         nq.rsi_band(rsi) if np.isfinite(rsi) else None,
-         "Relative Strength Index over 14 days. Above 70 is conventionally "
-         "read as overbought and below 30 as oversold; between them is neutral.")
+         nq.rsi_band(rsi) if np.isfinite(rsi) else None, nq.TOOLTIPS["rsi"])
     tile(columns[2], "MACD (12, 26, 9)",
          f"{histogram:+,.1f}" if np.isfinite(histogram) else "Insufficient history",
          nq.macd_band(histogram) if np.isfinite(histogram) else None,
-         "Moving Average Convergence Divergence. The figure is the histogram: "
-         "the MACD line less its signal line. Above zero the shorter average "
-         "is pulling ahead of the longer one, below zero it is falling behind.")
+         nq.TOOLTIPS["macd"])
     tile(columns[3], "From 52-week high",
-         nq.format_percent(technical.get("from_52w_high"), 0))
+         nq.format_percent(technical.get("from_52w_high"), 0), None,
+         nq.TOOLTIPS["from_52w_high"])
     tile(columns[4], "6-month return",
-         nq.format_percent(technical.get("return_6m"), 0))
+         nq.format_percent(technical.get("return_6m"), 0), None,
+         nq.TOOLTIPS["return_6m"])
     tile(columns[5], "12-month return",
-         nq.format_percent(technical.get("return_12m"), 0))
+         nq.format_percent(technical.get("return_12m"), 0), None,
+         nq.TOOLTIPS["return_12m"])
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):
@@ -991,19 +991,25 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
 
     left, right = st.columns([1, 2])
     with left:
-        st.metric("Probability of positive return", f"{probability * 100:.0f}%")
+        st.metric("Probability of positive return", f"{probability * 100:.0f}%",
+                  help=nq.TOOLTIPS["probability"])
         st.caption(nq.probability_band(probability, has_edge))
     with right:
         probability_bar(probability)
         note(nq.explain_probability(probability, horizon, has_edge))
 
     columns = st.columns(4)
-    columns[0].metric("Machine learning model reliability", reliability.get("label", "Unknown"))
+    columns[0].metric("Machine learning model reliability",
+                      reliability.get("label", "Unknown"),
+                      help=nq.TOOLTIPS["reliability"])
     columns[1].metric("Out-of-sample ROC-AUC",
                       f"{metrics.get('roc_auc', float('nan')):.3f}"
-                      if np.isfinite(nq._to_float(metrics.get("roc_auc"))) else "—")
-    columns[2].metric("Validation folds", (artifact or {}).get("validation_folds", "—"))
-    columns[3].metric("Data quality", f"{result.get('data_quality', 0) * 100:.0f}%")
+                      if np.isfinite(nq._to_float(metrics.get("roc_auc"))) else "—",
+                      help=nq.TOOLTIPS["roc_auc"])
+    columns[2].metric("Validation folds", (artifact or {}).get("validation_folds", "—"),
+                      help=nq.TOOLTIPS["folds"])
+    columns[3].metric("Data quality", f"{result.get('data_quality', 0) * 100:.0f}%",
+                      help=nq.TOOLTIPS["data_quality"])
 
     if not has_edge:
         # The panel size is read from the artifact rather than written into the
@@ -1041,18 +1047,23 @@ def render_risk(prices: pd.DataFrame, window: str) -> None:
     risk = nq.risk_score(metrics)
 
     columns = st.columns(5)
-    columns[0].metric("Risk", risk["band"])
-    columns[1].metric("Annualised volatility", nq.format_percent(metrics["volatility"], 0))
-    columns[2].metric("Maximum drawdown", nq.format_percent(metrics["max_drawdown"], 0))
-    columns[3].metric("Downside volatility", nq.format_percent(metrics["downside_volatility"], 0))
+    columns[0].metric("Risk", risk["band"], help=nq.TOOLTIPS["risk_band"])
+    columns[1].metric("Annualised volatility",
+                      nq.format_percent(metrics["volatility"], 0),
+                      help=nq.TOOLTIPS["volatility"])
+    columns[2].metric("Maximum drawdown",
+                      nq.format_percent(metrics["max_drawdown"], 0),
+                      help=nq.TOOLTIPS["max_drawdown"])
+    columns[3].metric("Downside volatility",
+                      nq.format_percent(metrics["downside_volatility"], 0),
+                      help=nq.TOOLTIPS["downside_volatility"])
     # Liquidity carries 10% of the risk score and was computed all along, but
     # the panel showed four of its five inputs and left this one invisible.
     turnover = nq._to_float(metrics.get("turnover"))
     columns[4].metric("Daily turnover",
                       nq.format_percent(turnover, 2) if np.isfinite(turnover)
                       else "Volume not reported",
-                      help="Median daily traded value as a share of market cap. "
-                           "Thin trading is itself a risk.")
+                      help=nq.TOOLTIPS["turnover"])
     note(f"Measured over {years} year{'s' if years > 1 else ''}. " + nq.EXPLANATIONS["risk"])
 
     with st.expander("Drawdown"):
@@ -1247,9 +1258,18 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
         "Trend": top.trend.to_numpy(),
         "Data quality": [f"{v * 100:.0f}%" for v in top.data_quality],
     }), width="stretch", hide_index=True, column_config={
-        "Rank": st.column_config.NumberColumn(width="small"),
-        "Ticker": st.column_config.TextColumn(width="small"),
-        "Company": st.column_config.TextColumn(width="large")})
+        "Rank": st.column_config.NumberColumn(width="small",
+                                              help=nq.TOOLTIPS["rank"]),
+        "Ticker": st.column_config.TextColumn(width="small",
+                                              help=nq.TOOLTIPS["ticker"]),
+        "Company": st.column_config.TextColumn(width="large",
+                                               help=nq.TOOLTIPS["company"]),
+        "Probability up": st.column_config.TextColumn(
+            help=nq.TOOLTIPS["probability"]),
+        "Risk": st.column_config.TextColumn(help=nq.TOOLTIPS["risk_column"]),
+        "Trend": st.column_config.TextColumn(help=nq.TOOLTIPS["trend"]),
+        "Data quality": st.column_config.TextColumn(
+            help=nq.TOOLTIPS["data_quality"])})
 
     # Reliability is a property of the model, not of a row, so repeating it
     # down every line of the table only made the columns narrower.

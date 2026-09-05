@@ -255,6 +255,11 @@ if len(_caps) >= 3:
           _values == sorted(_values, reverse=True),
           ", ".join(_ordered[:5]))
 
+# Every figure the dashboard labels should be able to say what it measures.
+# A label alone rarely does, and these are numbers people act on.
+_untipped = [m.label for m in at.metric if not m.help]
+check("every metric carries a tooltip", not _untipped, ", ".join(_untipped[:4]))
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
