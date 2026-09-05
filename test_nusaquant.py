@@ -260,6 +260,24 @@ if len(_caps) >= 3:
 _untipped = [m.label for m in at.metric if not m.help]
 check("every metric carries a tooltip", not _untipped, ", ".join(_untipped[:4]))
 
+# The projected range is a measured claim, not a decoration, so its shape is
+# asserted: symmetric in log space around the last close, wider at 12 months
+# than at 6, wider at 80% than at 50%, and absent without a year of prices.
+_cone = nq.volatility_cone(nq.load_from_cache(TICKERS[0], "prices"))
+check("projected range available", _cone.get("available"))
+if _cone.get("available"):
+    _last = _cone["last"]
+    _w = {(h, l): (hi / lo) for h, lv in _cone["bands"].items()
+          for l, (lo, hi) in lv.items()}
+    check("wider at 12 months than at 6", _w[(252, 50)] > _w[(126, 50)])
+    check("wider at 80% than at 50%", _w[(126, 80)] > _w[(126, 50)])
+    check("range is symmetric around the last close in log space",
+          all(abs(np.log(hi / _last) + np.log(lo / _last)) < 1e-9
+              for lv in _cone["bands"].values() for lo, hi in lv.values()))
+check("no projected range without a year of prices",
+      not nq.volatility_cone(
+          nq.load_from_cache(TICKERS[0], "prices").head(120)).get("available"))
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
@@ -280,7 +298,8 @@ check("risk shown", "Annualised volatility" in labels)
 # The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
 # onto a canvas whose cells clip long text, and this table is read rather than
 # sorted, so the wrapping matters more than the interactivity.
-feat = [str(m.value) for m in at.markdown if "class='nq-table'" in str(m.value)]
+# Selected by its own class: the projected-range table shares nq-table.
+feat = [str(m.value) for m in at.markdown if "nq-metrics" in str(m.value)]
 check("feature table rendered", len(feat) == 1, f"{len(feat)} tables")
 if feat:
     # Group headers are <tr class='grp'>, which does not match "<tr>",

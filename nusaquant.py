@@ -1405,6 +1405,59 @@ def moving_averages(prices: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
     return frame
 
 
+#: How wide the projected range has to be to hold the price the stated share of
+#: the time. These are MEASURED on this project's own cached panel, not taken
+#: from a normal distribution: every observation where 252 days of history were
+#: available was projected forward and checked against what actually happened.
+#:
+#: The textbook multipliers are 1.00 for 68% and 2.00 for 95%. The 68% figure
+#: holds up here — a 6-month band drawn at 1.00 covered 66.7% against a
+#: theoretical 68.3% — but 2.00 covered only 87.5% rather than 95.4%. IDX
+#: returns have far fatter tails than a bell curve, and reaching a true 95%
+#: needs a multiplier near 3.7. At that width the band spans two orders of
+#: magnitude and tells a reader nothing, so 50% and 80% are what is shown.
+CONE_MULTIPLIERS: dict[int, dict[int, float]] = {
+    126: {50: 0.65, 80: 1.48},
+    252: {50: 0.75, 80: 1.73},
+}
+CONE_LOOKBACK = 252          # one year of daily returns behind each estimate
+
+
+def volatility_cone(prices: pd.DataFrame,
+                    lookback: int = CONE_LOOKBACK) -> dict[str, Any]:
+    """Where the price could sit in 6 and 12 months, from its own volatility.
+
+    A range, never a target. The width comes from how much the stock has
+    actually moved over the past year, scaled to the horizon by the
+    square-root-of-time rule and then widened by the measured multipliers
+    above. It is deliberately symmetric around the last close: this says how
+    far the price might travel, not which way.
+    """
+    empty = {"available": False}
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return empty
+    close = prices.sort_values("date")["close"].astype(float).dropna().to_numpy()
+    if len(close) < lookback + 1:
+        return empty
+
+    returns = np.diff(np.log(np.clip(close[-(lookback + 1):], 1e-9, None)))
+    returns = returns[np.isfinite(returns)]
+    daily = float(np.std(returns, ddof=1)) if returns.size > 2 else np.nan
+    last = float(close[-1])
+    if not np.isfinite(daily) or daily <= 0 or last <= 0:
+        return empty
+
+    cone = {"available": True, "last": last,
+            "annual_volatility": daily * math.sqrt(TRADING_DAYS_PER_YEAR),
+            "lookback": lookback, "bands": {}}
+    for horizon, levels in CONE_MULTIPLIERS.items():
+        sigma = daily * math.sqrt(horizon)
+        cone["bands"][horizon] = {
+            level: (last * math.exp(-k * sigma), last * math.exp(k * sigma))
+            for level, k in levels.items()}
+    return cone
+
+
 def rsi_series(close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's RSI across the whole series, for charting."""
     values = pd.Series(close, dtype=float)
@@ -2001,6 +2054,12 @@ TOOLTIPS: dict[str, str] = {
         "Volatility computed from losing days only. Two stocks can share an "
         "annualised volatility while one of them mostly moved upward, and this "
         "separates them.",
+    "cone_range":
+        "How far the price could drift by this horizon, from how much the "
+        "stock has actually moved over the past year. The 50% range is where "
+        "it landed about half the time historically, the 80% range about eight "
+        "times in ten. It says how far, never which way, and it assumes the "
+        "stock keeps moving as much as it has been.",
     "turnover":
         "Median daily traded value as a share of market capitalisation. Thin "
         "trading is itself a risk: it is what makes a position hard to leave "
@@ -2033,6 +2092,23 @@ EXPLANATIONS = {
     "risk": ("Risk summarises historical volatility, drawdown, downside movement "
              "and liquidity. It describes what already happened and does not "
              "guarantee future risk."),
+    "cone": ("<strong>How to read the shaded range.</strong> It shows how far "
+             "this stock's price could drift over the next 6 and 12 months, "
+             "based on how much it has actually moved over the past year. The "
+             "darker band is where the price ended up about half the time in "
+             "the past; the lighter one about eight times in ten."
+             "<br><br><strong>It does not say which way.</strong> The range is "
+             "the same size above and below today's price on purpose. Whether "
+             "the stock rises or falls is what the probability figures try to "
+             "answer, and on this snapshot they answer it poorly."
+             "<br><br><strong>It assumes the stock keeps moving as much as it "
+             "has been.</strong> If the market goes quiet the real range will "
+             "be narrower than this, and if it panics it will be wider. A "
+             "range is not a promise, and prices can and do finish outside it."
+             "<br><br>The widths were measured on this project's own cached "
+             "companies rather than taken from a textbook, and those "
+             "measurements overlap heavily, so read them as roughly right "
+             "rather than exact."),
     "technical": ("These indicators describe what the price has already done. "
                   "They are not a forecast and they are not part of the machine "
                   "learning model — "

@@ -600,11 +600,17 @@ def render_chart(company: dict, api_key: str,
     # The window and the style sit with the chart they change rather than in
     # the sidebar: a control three sections away from its effect is one the
     # reader has to go looking for.
-    left, right = st.columns([1, 1])
+    left, middle, right = st.columns([1, 1, 1])
     window = left.radio("Window", list(PRICE_WINDOWS), horizontal=True,
                         key="price_window")
-    style = right.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
-                        key="chart_style")
+    style = middle.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
+                         key="chart_style")
+    # Off by default is tempting, but the projection is the point of the
+    # feature; a reader who wants a clean price line can clear it, and the
+    # y-axis it stretches is the only cost.
+    right.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
+    project = right.checkbox("Show 6/12-month projection", value=True,
+                             key="show_cone", help=nq.TOOLTIPS["cone_range"])
     # Reserved above the chart and filled once the prices are in hand: in live
     # mode the series does not exist until the fetch below has run.
     trend_slot = st.empty()
@@ -627,6 +633,7 @@ def render_chart(company: dict, api_key: str,
     # does not blank the 12-month return; live mode has only what it fetched.
     source = company["prices"] if not company["prices"].empty else prices
     technical = nq.technical_state(source)
+    technical["cone"] = nq.volatility_cone(source)
     if technical.get("available"):
         trend = technical["trend"]
         colour = trend_colour(nq.trend_position(trend))
@@ -707,6 +714,25 @@ def render_chart(company: dict, api_key: str,
     span = [float(np.nanmin(close)), float(np.nanmax(close))]
     if candle:
         span = [float(np.nanmin(history["low"])), float(np.nanmax(history["high"]))]
+
+    # The cone is drawn from the FULL cached series, not the windowed slice: a
+    # one-year window leaves barely enough returns to estimate volatility from,
+    # and the estimate should not change because the reader changed the zoom.
+    cone = nq.volatility_cone(company["prices"] if not company["prices"].empty
+                              else prices) if project else {"available": False}
+    if cone.get("available"):
+        last_date = history["date"].iloc[-1]
+        future = [last_date + pd.Timedelta(days=int(d * 365 / 252))
+                  for d in (0, 126, 252)]
+        for level, shade in ((80, "rgba(29,78,111,.09)"),
+                             (50, "rgba(29,78,111,.20)")):
+            upper = [cone["last"]] + [cone["bands"][h][level][1] for h in (126, 252)]
+            lower = [cone["last"]] + [cone["bands"][h][level][0] for h in (126, 252)]
+            figure.add_trace(go.Scatter(
+                x=future + future[::-1], y=upper + lower[::-1], fill="toself",
+                fillcolor=shade, line={"width": 0}, hoverinfo="skip",
+                name=f"{level}% projected range"), row=1, col=1)
+            span = [min(span[0], *lower), max(span[1], *upper)]
     for column in ("ma50", "ma200"):
         if column in averages and averages[column].notna().any():
             span[0] = min(span[0], float(averages[column].min()))
@@ -736,6 +762,11 @@ def render_chart(company: dict, api_key: str,
          f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
          f"there is enough history to form them. Drag across the chart to "
          f"zoom in, scroll to zoom, double-click to reset.")
+    if cone.get("available"):
+        note(nq.EXPLANATIONS["cone"])
+    elif project:
+        note("A projected range needs a year of daily prices behind it, and "
+             "this company does not have one yet in the snapshot.")
     return prices, window, technical
 
 
@@ -768,6 +799,30 @@ def render_technical(technical: dict, window: str) -> None:
     tile(columns[5], "12-month return",
          nq.format_percent(technical.get("return_12m"), 0), None,
          nq.TOOLTIPS["return_12m"])
+
+    cone = technical.get("cone") or {}
+    if cone.get("available"):
+        st.markdown("##### Projected range")
+        rows = []
+        for horizon, label in ((126, "6 months"), (252, "12 months")):
+            for level in (50, 80):
+                low, high = cone["bands"][horizon][level]
+                rows.append(
+                    "<tr>"
+                    f"<td><strong>{label}</strong></td>"
+                    f"<td>{level}% of the time</td>"
+                    f"<td class='num'>{escape(nq.format_rupiah(low, compact=False))}"
+                    f" &ndash; {escape(nq.format_rupiah(high, compact=False))}</td>"
+                    f"<td class='num'>{(high / cone['last'] - 1) * 100:+.0f}% / "
+                    f"{(low / cone['last'] - 1) * 100:+.0f}%</td>"
+                    "</tr>")
+        st.markdown(
+            "<table class='nq-table nq-cone'>"
+            "<colgroup><col style='width:16%'><col style='width:22%'>"
+            "<col style='width:38%'><col style='width:24%'></colgroup>"
+            "<thead><tr><th>Horizon</th><th>Lands inside</th><th>Price range</th>"
+            "<th>Versus today</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>", unsafe_allow_html=True)
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):
@@ -943,7 +998,7 @@ def render_features(company: dict, model_features: list[str]) -> None:
                 "</tr>")
 
     st.markdown(
-        "<table class='nq-table'>"
+        "<table class='nq-table nq-metrics'>"
         "<colgroup><col style='width:20%'><col style='width:13%'>"
         "<col style='width:11%'><col style='width:13%'><col style='width:43%'>"
         "</colgroup>"

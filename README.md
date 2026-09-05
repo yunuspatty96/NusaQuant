@@ -152,6 +152,7 @@ The single-stock page runs in this order:
 |---|---|
 | Price history | Line or candlestick, MA50 and MA200, volume beneath |
 | RSI and MACD | Charted over the same window |
+| Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-four, grouped by category |
@@ -161,6 +162,23 @@ The single-stock page runs in this order:
 **Candlestick needs a full bar.** Roughly half the cached companies carry open,
 high and low; the rest carry only a close. The toggle is offered either way and
 says plainly when it has to fall back to the line.
+
+**The projected range is measured, not assumed.** The cone is a volatility
+cone: the stock's own daily volatility over the trailing year, scaled to the
+horizon by the square-root-of-time rule, widened by a multiplier. The
+multipliers are not the textbook 1.00 and 2.00 — they were measured on this
+project's own cached panel by projecting every observation with a year of
+history behind it and checking what actually happened afterwards.
+
+A 6-month band drawn at 1.00 covered 66.7% against a theoretical 68.3%, which
+holds up. But 2.00 covered only 87.5% rather than 95.4%: IDX returns have far
+fatter tails than a bell curve, and a true 95% needs a multiplier near 3.7. At
+that width the band spans two orders of magnitude and tells a reader nothing,
+so the dashboard shows 50% and 80% instead, at the measured multipliers.
+
+The cone is deliberately symmetric around the last close. It says how far the
+price might travel, never which way — direction is the probability's job, and
+on this snapshot the probability does that job poorly.
 
 **The technical block is descriptive, never predictive**, and is deliberately
 kept out of the machine learning model. Momentum and volatility were tested as
