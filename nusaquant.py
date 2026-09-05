@@ -116,6 +116,20 @@ class CreditMeter:
         self.spent += credits
         self.by_endpoint[endpoint] = self.by_endpoint.get(endpoint, 0) + credits
 
+    def refund(self, endpoint: str, credits: int = 1) -> None:
+        """Give back a charge Sectors did not actually bill.
+
+        The meter charges *before* a request is sent, because discovering an
+        overrun afterwards is useless. But Sectors bills on the response, and
+        400, 401/403, 429 and 5xx are free. Without a refund the meter drifts
+        upward on every failure and eventually halts a run that still had
+        budget — and the "credits spent" line the run prints at the end
+        overstates what the account was really charged.
+        """
+        self.spent = max(0, self.spent - credits)
+        if endpoint in self.by_endpoint:
+            self.by_endpoint[endpoint] = max(0, self.by_endpoint[endpoint] - credits)
+
     @property
     def remaining(self) -> int | None:
         return None if self.budget is None else self.budget - self.spent
@@ -191,8 +205,14 @@ def api_request(path: str, api_key: str, params: dict[str, Any] | None = None,
     url = f"{API_BASE_URL}/{path.lstrip('/')}"
     clean = {k: v for k, v in (params or {}).items() if v is not None}
 
+    endpoint, price = _price_of(path, clean)
     if _METER is not None:
-        _METER.charge(*_price_of(path, clean))
+        _METER.charge(endpoint, price)
+
+    def unbilled():
+        """Sectors charged nothing, so neither should the meter."""
+        if _METER is not None:
+            _METER.refund(endpoint, price)
 
     detail = ""
     for attempt in range(max_retries):
@@ -203,8 +223,10 @@ def api_request(path: str, api_key: str, params: dict[str, Any] | None = None,
             detail = f"Timeout after {timeout}s"
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt); continue
+            unbilled()
             raise SectorsAPIError("The request to Sectors timed out.", detail=detail) from None
         except requests.RequestException as exc:
+            unbilled()
             raise SectorsAPIError(
                 "Could not reach Sectors. Check your internet connection.",
                 detail=f"{type(exc).__name__}: {exc}") from None
@@ -224,8 +246,13 @@ def api_request(path: str, api_key: str, params: dict[str, Any] | None = None,
             wait = response.headers.get("Retry-After")
             time.sleep(float(wait) if wait and wait.isdigit() else 2 ** attempt)
             continue
+        # Sectors bills on the response: 2xx costs the endpoint's stated price
+        # and 404 costs 1, but 400, 401/403, 429 and 5xx are free.
+        if response.status_code not in (200, 404):
+            unbilled()
         raise SectorsAPIError(message, status=response.status_code, detail=detail)
 
+    unbilled()
     raise SectorsAPIError(API_HELP, detail=detail)
 
 
@@ -361,9 +388,20 @@ def load_from_cache(ticker: str, kind: str, base: str = "data") -> pd.DataFrame:
     return frame
 
 
-def cached_tickers(kind: str = "quarterly", base: str = "data") -> list[str]:
+def cached_tickers(kind: str = "quarterly", base: str = "data",
+                   complete_only: bool = True) -> list[str]:
+    """Tickers on disk. By default only those with BOTH halves present.
+
+    A ticker whose price history failed after its fundamentals were saved is
+    real, paid-for data worth keeping for the next run to finish — but it is
+    not a usable observation, and nothing downstream should see it.
+    """
     suffix = f"_{kind}.parquet"
-    return sorted(p.name[: -len(suffix)] for p in cache_dir(base).glob(f"*{suffix}"))
+    names = sorted(p.name[: -len(suffix)] for p in cache_dir(base).glob(f"*{suffix}"))
+    if not complete_only:
+        return names
+    return [t for t in names
+            if is_cached(t, "quarterly", base) and is_cached(t, "prices", base)]
 
 
 def cache_as_of(base: str = "data") -> str:
@@ -402,18 +440,37 @@ def collect_ticker(api_key: str, ticker: str, *, n_quarters: int,
                    force: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
     """Fetch one ticker, or reuse the cache. Returns (quarterly, prices, paid).
 
-    Only a complete pair is cached: a half-saved ticker would be reused as if
-    it were whole and quietly corrupt the dataset.
+    Each half is banked the moment it arrives, and each half is fetched only if
+    it is missing. Waiting for a complete pair before writing anything looks
+    tidier but throws away credits that have already been charged: a ticker
+    whose fundamentals were bought and whose price history then hit a 429 lost
+    the fundamentals too, and the next run bought them again. One real run lost
+    around a hundred credits that way, nine tickers at a time.
+
+    The complete-pair rule still holds, but where it belongs — at read time.
+    ``cached_tickers`` reports only tickers with both halves present, so a
+    half-collected ticker is never treated as usable data.
     """
-    if not force and is_cached(ticker, "quarterly", base) and is_cached(ticker, "prices", base):
+    have_quarterly = not force and is_cached(ticker, "quarterly", base)
+    have_prices = not force and is_cached(ticker, "prices", base)
+    if have_quarterly and have_prices:
         return (load_from_cache(ticker, "quarterly", base),
                 load_from_cache(ticker, "prices", base), False)
 
-    quarterly = get_quarterly_financials(api_key, ticker, n_quarters)
-    prices = get_daily_history(api_key, ticker, price_start, price_end)
-    if not quarterly.empty and not prices.empty:
-        save_to_cache(quarterly, ticker, "quarterly", base)
-        save_to_cache(prices, ticker, "prices", base)
+    if have_quarterly:
+        quarterly = load_from_cache(ticker, "quarterly", base)
+    else:
+        quarterly = get_quarterly_financials(api_key, ticker, n_quarters)
+        if not quarterly.empty:
+            save_to_cache(quarterly, ticker, "quarterly", base)
+
+    if have_prices:
+        prices = load_from_cache(ticker, "prices", base)
+    else:
+        prices = get_daily_history(api_key, ticker, price_start, price_end)
+        if not prices.empty:
+            save_to_cache(prices, ticker, "prices", base)
+
     return quarterly, prices, True
 
 

@@ -137,7 +137,9 @@ def print_plan(plan: dict) -> None:
     print(f"  New to buy          : {plan['new_companies']} companies")
     print(f"  Universe size       : {plan['universe_size']} companies")
     print(f"  ESTIMATED SPEND     : ~{plan['estimated_total']:,} credits")
-    print(f"  Expected dataset    : ~{plan['estimated_rows']:,} rows")
+    # A floor, not a forecast: it assumes every company has exactly --quarters
+    # quarters, and cached companies were often collected with more.
+    print(f"  Expected dataset    : at least ~{plan['estimated_rows']:,} rows")
     print("─" * 62)
 
 
