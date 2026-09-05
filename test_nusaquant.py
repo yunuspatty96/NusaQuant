@@ -244,6 +244,17 @@ for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_SECTOR):
           "" if _opened else (str(_probe.exception)[:120] if _probe.exception
                               else "the heading for this view never rendered"))
 
+# "Universe size N" claims the N largest by market cap. It used to take them
+# alphabetically, so the claim was false and nothing said so.
+_caps = appmod.snapshot_market_caps()
+if len(_caps) >= 3:
+    _ordered = appmod.by_market_cap(
+        pd.DataFrame({"symbol": sorted(_caps)}))["symbol"].tolist()
+    _values = [_caps[t] for t in _ordered if t in _caps]
+    check("universe is ordered largest market cap first",
+          _values == sorted(_values, reverse=True),
+          ", ".join(_ordered[:5]))
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",

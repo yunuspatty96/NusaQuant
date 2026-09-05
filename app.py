@@ -78,6 +78,16 @@ def trend_colour(position: float) -> str:
     return "#%02X%02X%02X" % (round(red * 255), round(green * 255), round(blue * 255))
 
 
+#: Shown beside every universe-size control. The list is ordered largest first
+#: on both paths — the screener sorts by -market_cap, and the cached side is
+#: sorted by the market cap in its own price files — so the wording is a
+#: description of what happens rather than a promise about it.
+UNIVERSE_SIZE_NOTE = ("Taken from the largest companies by market capitalisation, "
+                      "largest first.")
+UNIVERSE_SIZE_HELP = ("How many companies to include, counting down from the "
+                      "largest by market capitalisation. {total} are available.")
+
+
 #: The three views, named once. These strings are the sidebar labels, the
 #: headings on the pages they open, and the values main() dispatches on, so a
 #: reworded label used to have to be changed in three places by hand — and
@@ -205,6 +215,36 @@ def snapshot_as_of() -> str:
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def snapshot_data(ticker: str, kind: str) -> pd.DataFrame:
     return nq.load_from_cache(ticker, kind)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def snapshot_market_caps() -> dict[str, float]:
+    """Latest cached market cap per ticker, for ordering the universe.
+
+    The live screener returns companies largest-first, but the cached side had
+    no ordering at all: cached_tickers() is alphabetical, and the merge that
+    added the classification re-sorted universe.parquet by symbol as well. A
+    "universe size" of 10 therefore took AMMN through BYAN rather than the ten
+    largest, which is not what the control claims to do. The cached price files
+    already carry a market cap, so the order costs nothing to get right.
+    """
+    caps = {}
+    for ticker in nq.cached_tickers():
+        prices = nq.load_from_cache(ticker, "prices")
+        if prices.empty or "market_cap" not in prices.columns:
+            continue
+        latest = prices.sort_values("date").iloc[-1]
+        caps[ticker] = nq._to_float(latest.get("market_cap"))
+    return caps
+
+
+def by_market_cap(frame: pd.DataFrame) -> pd.DataFrame:
+    """Largest first, so "the top N" means what it says."""
+    caps = snapshot_market_caps()
+    ordered = frame.copy()
+    ordered["_cap"] = ordered["symbol"].map(caps)
+    return (ordered.sort_values("_cap", ascending=False, na_position="last")
+            .drop(columns="_cap").reset_index(drop=True))
 
 
 # The API key is part of these cache keys, which is correct — two keys must
@@ -1118,8 +1158,8 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     # from every ranking, with nothing on screen to say so.
     largest = max(5, len(companies))
     size = st.slider("Universe size", 5, largest, min(len(companies), largest),
-                     step=1, help=f"How many companies to score and rank. "
-                                  f"{len(companies)} are available.")
+                     step=1, help=UNIVERSE_SIZE_HELP.format(total=len(companies)))
+    st.caption(UNIVERSE_SIZE_NOTE)
     if controls["offline"]:
         st.caption("Cached mode — this ranking costs 0 API credits.")
     else:
@@ -1250,25 +1290,48 @@ def render_sector_ranking(controls: dict) -> None:
     universe = nq.load_universe()
     if universe.empty or "sector" not in universe.columns:
         st.warning("The cached universe carries no IDX classification yet. "
-                   "Run `python train.py --sectors` once — it costs 1 credit "
+                   "Run `python train.py --screen` once — it costs 1 credit "
                    "and covers every company in the screen.")
         return
 
-    cached = set(nq.cached_tickers())
+    cached = [t for t in by_market_cap(
+        pd.DataFrame({"symbol": sorted(nq.cached_tickers())}))["symbol"]]
+    available = len(cached) if controls["offline"] else len(universe)
+
+    # The size is chosen and submitted before any grouping is offered: the
+    # sector counts depend on it, so showing them first would mean showing
+    # numbers that change the moment the slider moves.
+    with st.form("sector_universe"):
+        size = st.slider("Universe size", 5, max(5, available),
+                         min(available, max(5, available)), step=1,
+                         help=UNIVERSE_SIZE_HELP.format(total=available))
+        st.caption(UNIVERSE_SIZE_NOTE)
+        submitted = st.form_submit_button("Submit", type="primary")
+    if submitted:
+        st.session_state["sector_size"] = size
+    if "sector_size" not in st.session_state:
+        st.info("Choose a universe size and press **Submit**.")
+        return
+    size = st.session_state["sector_size"]
+
     level_label = st.radio("Group by", ["Sector", "Sub-sector"], horizontal=True)
     level = "sector" if level_label == "Sector" else "sub_sector"
 
     if controls["offline"]:
         # Only companies with collected data can be compared on NusaQuant's own
         # ratios, so the picker counts those rather than the whole screen.
-        pool = universe[universe["symbol"].isin(cached)]
+        scope = cached[:size]
+        pool = universe[universe["symbol"].isin(scope)]
         counts = pool[level].value_counts()
         if counts.empty:
             st.info("No cached company carries a classification yet.")
             return
+        st.caption(f"{len(scope)} of {len(cached)} cached companies in scope, "
+                   f"the largest by market capitalisation.")
         options = [f"{name} ({n})" for name, n in counts.items()]
         chosen = st.selectbox(f"{level_label} — the number in brackets is how "
-                              f"many cached companies it holds", options)
+                              f"many companies it holds within this universe",
+                              options)
         name = chosen.rsplit(" (", 1)[0]
         members = sorted(pool.loc[pool[level] == name, "symbol"])
         with st.spinner(f"Scoring {len(members)} companies…"):
@@ -1278,12 +1341,14 @@ def render_sector_ranking(controls: dict) -> None:
     else:
         names = sorted(universe[level].dropna().unique())
         name = st.selectbox(level_label, names)
-        st.caption("Live mode — this screen costs 1 API credit and returns "
-                   "every company in the group, not only the cached ones.")
+        st.caption(f"Live mode — this screen costs 1 API credit and returns up "
+                   f"to {size} companies in the group, largest by market "
+                   f"capitalisation first, not only the cached ones.")
         if not st.button("Screen this group", type="primary"):
             st.info("Press the button to run the screen."); return
         try:
-            table = nq.get_sector_peers(controls["api_key"], level=level, name=name)
+            table = nq.get_sector_peers(controls["api_key"], level=level,
+                                        name=name, limit=size)
         except nq.SectorsAPIError as error:
             show_error(error); return
         source = ("Sectors' own screener ratios (pe_ttm, pb_mrq, ps_ttm, "
@@ -1388,9 +1453,9 @@ def main() -> None:
 
     if controls["offline"]:
         names = nq.company_names()
-        companies = pd.DataFrame({
+        companies = by_market_cap(pd.DataFrame({
             "symbol": controls["snapshot"],
-            "company_name": [names.get(t, t) for t in controls["snapshot"]]})
+            "company_name": [names.get(t, t) for t in controls["snapshot"]]}))
         st.info(f"Cached mode — no API credits are being spent. Figures are a "
                 f"real Sectors snapshot taken on {snapshot_as_of()}, not today's "
                 f"market.")
