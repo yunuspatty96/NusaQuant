@@ -118,12 +118,20 @@ Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 
 ## 6. Push ke GitHub
 
-**Ini langkah yang paling sering gagal.** `models/` dan `data/cache/` wajib ikut ter-commit — `train.py` tidak bisa jalan di Streamlit Cloud.
+**Ini langkah yang paling sering gagal.** `models/` dan `data/cache/` wajib ikut ter-commit — `train.py` tidak bisa jalan di Streamlit Cloud. Keduanya sengaja **tidak** masuk `.gitignore`, jadi `git add -A` sudah cukup dan `-f` tidak diperlukan.
+
+Pertama kali saja — sambungkan ke repo GitHub yang sudah Anda buat:
 
 ```bash
-git add -f models/ data/cache/
-git add app.py nusaquant.py train.py requirements.txt .gitignore .streamlit/
-git commit -m "NusaQuant: models and snapshot"
+git remote add origin https://github.com/USERNAME/NusaQuant.git
+git push -u origin main
+```
+
+Selanjutnya cukup:
+
+```bash
+git add -A
+git commit -m "pesan yang menjelaskan perubahannya"
 git push
 ```
 
