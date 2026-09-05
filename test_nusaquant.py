@@ -61,18 +61,27 @@ _M = [None]
 nq.api_request = fake
 
 # ── 1. Ten features, no more ─────────────────────────────────────────────
-check("metric schema covers six categories", len(nq.CATEGORY_ORDER) == 6,
+check("metric schema covers seven categories", len(nq.CATEGORY_ORDER) == 7,
       ", ".join(nq.CATEGORY_ORDER))
 check("only scale-free ratios are modelled",
       all(nq.FEATURE_BY_NAME[f].unit in ("multiple", "percent", "ratio")
           for f in nq.FEATURE_NAMES), str(nq.FEATURE_NAMES))
 check("rupiah amounts are shown but never modelled",
       not any(f.modelled for f in nq.FEATURE_SCHEMA if f.unit == "currency"))
-# Metrics the endpoint cannot supply are not listed at all: an always-empty row
-# is worse than an absent one, and the README carries the reason instead.
-check("uncomputable metrics are not listed",
-      not any(f.name in ("npl", "ldr", "nim", "dividend", "dpr", "dividend_yield")
-              for f in nq.FEATURE_SCHEMA))
+# The banking ratios stay out: nothing this project fetches can produce them.
+# Dividends came back once the screener proved able to supply them.
+check("bank-only ratios are not listed",
+      not any(f.name in ("npl", "ldr", "nim") for f in nq.FEATURE_SCHEMA))
+# A screener snapshot must never reach training. Feeding today's trailing yield
+# to a 2022 observation is look-ahead, so the separation is asserted, not
+# assumed: compute_features is the only path the training set travels.
+check("snapshot metrics are never modelled",
+      not any(f.modelled for f in nq.FEATURE_SCHEMA if not f.point_in_time))
+_panel = nq.build_panel(nq.load_from_cache(TICKERS[0], "quarterly"))
+_computed = nq.compute_features(_panel, 1e14, close=1000)
+check("compute_features leaves snapshot metrics empty",
+      all(not np.isfinite(nq._to_float(_computed.get(f.name)))
+          for f in nq.FEATURE_SCHEMA if not f.point_in_time))
 check("no ensemble leftovers", not hasattr(nq, "calculate_model_agreement"))
 
 # ── 2. API key never required in code ────────────────────────────────────

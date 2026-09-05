@@ -183,6 +183,20 @@ def live_prices(ticker: str, start: str, end: str, api_key: str) -> pd.DataFrame
     return nq.get_daily_history(api_key, ticker, start, end)
 
 
+def _with_dividends(features: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """Fill the dividend columns from the cached screen.
+
+    They are written here rather than in compute_features on purpose. The
+    training path goes through compute_features and must never see them: a
+    trailing figure taken today is not what was known in 2022, and the whole
+    point-in-time discipline of this project depends on that line holding.
+    """
+    for metric, value in nq.company_dividends(ticker).items():
+        if metric in features.columns:
+            features.loc[features.index[0], metric] = value
+    return features
+
+
 def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
     """Assemble one company's features, from the snapshot or from the API.
 
@@ -222,7 +236,8 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
         "overview": overview,
         "quarterly": quarterly,
         "prices": prices,
-        "features": nq.features_frame(quarterly, market_cap, close),
+        "features": _with_dividends(
+            nq.features_frame(quarterly, market_cap, close), ticker),
         "latest_period": quarterly["report_date"].max() if not quarterly.empty else pd.NaT,
         "n_quarters": len(quarterly),
     }
@@ -775,7 +790,9 @@ def render_features(company: dict, model_features: list[str]) -> None:
             # the per-share figures: they are shown because a reader wants them,
             # but a level cannot be a cross-sectional input — a bank with IDR
             # 1,600T of assets and a small cap with IDR 2T are not on one scale.
-            if not spec.modelled:
+            if not spec.point_in_time:
+                in_model = "Snapshot"
+            elif not spec.modelled:
                 in_model = "Reference"
             elif spec.name in used:
                 in_model = "Yes"
@@ -807,6 +824,8 @@ def render_features(company: dict, model_features: list[str]) -> None:
         unsafe_allow_html=True)
 
     modelled = sum(1 for f in nq.FEATURE_SCHEMA if f.modelled)
+    as_of = nq.screen_as_of()
+    screened = f" taken on {as_of}" if as_of else ""
     note(f"Values are as reported for the latest available financial period. A "
          f"high or low reading is not automatically good or bad — the machine "
          f"learning model "
@@ -820,6 +839,11 @@ def render_features(company: dict, model_features: list[str]) -> None:
          f"rupiah: shown because a reader wants it, never modelled, because a "
          f"level would let the machine learning model split on company size rather "
          f"than on value."
+         f"<br><br><em>Snapshot</em> marks the dividend figures, which come "
+         f"from the screener as trailing values{screened} rather than "
+         f"reconstructed at each historical date. They are shown and never "
+         f"modelled: feeding today's yield to a 2022 observation would be "
+         f"look-ahead of exactly the kind the leakage audit exists to catch."
          f"<br><br>A dash is a metric this company did not file for the period, "
          f"or one that would be economically meaningless — a P/E on a loss "
          f"is a category error, not a cheap stock — and the Meaning column "

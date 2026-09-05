@@ -164,16 +164,33 @@ def _prioritise_cached(universe: pd.DataFrame, target: int) -> pd.DataFrame:
     return pd.concat([already, fresh.head(room)], ignore_index=True)
 
 
-def fetch_sectors(api_key: str) -> int:
-    """One screen, one credit: attach IDX classification to the cached universe."""
+def fetch_screen(api_key: str) -> int:
+    """One screen, one credit: classification and dividends for the universe."""
+    from datetime import datetime
+
     meter = nq.CreditMeter(budget=5)
     nq.set_credit_meter(meter)
-    print("Screening the universe for sector, sub-sector and industry…")
+    print("Screening the universe for classification and trailing dividends…")
 
     raw: list = []
+    fresh = pd.DataFrame()
     try:
-        fresh = nq.get_company_classification(
-            api_key, where=UNIVERSE_FILTER, limit=200, raw=raw)
+        # Dividends are named with a condition true for every row, so that
+        # companies paying nothing stay in the screen instead of vanishing
+        # from it. If the parser rejects that form the request is a 400, which
+        # Sectors does not bill, so the fallback costs nothing to try.
+        try:
+            fresh = nq.get_company_classification(
+                api_key, where=UNIVERSE_FILTER, limit=200,
+                dividends=True, raw=raw)
+        except nq.SectorsAPIError as exc:
+            if exc.status != 400:
+                raise
+            print(f"  The combined screen was rejected: {exc.message}")
+            print("  A 400 is not billed, so falling back to classification "
+                  "only — dividends would need a separate approach.")
+            fresh = nq.get_company_classification(
+                api_key, where=UNIVERSE_FILTER, limit=200, raw=raw)
     except nq.SectorsAPIError as exc:
         print(f"\nThe screen failed: {exc.message}")
         if exc.detail:
@@ -192,10 +209,14 @@ def fetch_sectors(api_key: str) -> int:
         print("\nThe screen returned no companies.")
         return 1
 
-    filled = {f: int(fresh[f].notna().sum()) for f in nq.CLASSIFICATION_FIELDS
-              if f in fresh.columns}
-    print(f"\n{len(fresh)} companies screened. Classification filled in: "
+    wanted = list(nq.CLASSIFICATION_FIELDS) + list(nq.DIVIDEND_FIELDS.values())
+    filled = {f: int(fresh[f].notna().sum()) for f in wanted if f in fresh.columns}
+    print(f"\n{len(fresh)} companies screened. Fields filled in: "
           + ", ".join(f"{k} {v}/{len(fresh)}" for k, v in filled.items()))
+    paying = filled.get("dividend", 0)
+    if "dividend" in fresh.columns:
+        print(f"  {paying} of {len(fresh)} report a trailing dividend; the rest "
+              f"pay none, and are kept in the screen rather than filtered out.")
 
     if not any(filled.values()):
         print("\nNo classification came back. include_query_values did not "
@@ -203,6 +224,7 @@ def fetch_sectors(api_key: str) -> int:
               "instead, at 1 credit per company.")
         return 1
 
+    fresh["screened_at"] = datetime.now().strftime("%Y-%m-%d")
     merged = nq.merge_universe(nq.load_universe(), fresh)
     nq.cache_universe(merged)
     cached = nq.cached_tickers()
@@ -703,16 +725,20 @@ def main() -> int:
                         help="Show the plan and cost, fetch nothing.")
     parser.add_argument("--force", action="store_true",
                         help="Ignore the cache and re-fetch (spends credits again).")
-    parser.add_argument("--sectors", action="store_true",
-                        help="Fetch sector, sub-sector and industry for the "
-                             "universe and merge them into the cache. 1 credit.")
+    parser.add_argument("--screen", "--sectors", action="store_true",
+                        dest="screen",
+                        help="Screen the universe for sector, sub-sector, "
+                             "industry and trailing dividends, and merge the "
+                             "result into the cache. 1 credit. Re-run whenever "
+                             "the dividend figures need refreshing; the "
+                             "classification does not go stale.")
     parser.add_argument("--offline", action="store_true",
                         help="Re-train from data/cache/ only. No API key, no "
                              "network, no credits.")
     args = parser.parse_args()
 
-    if args.sectors:
-        return fetch_sectors(nq.get_api_key(args.api_key))
+    if args.screen:
+        return fetch_screen(nq.get_api_key(args.api_key))
 
     if args.offline:
         meter = nq.CreditMeter(budget=0)

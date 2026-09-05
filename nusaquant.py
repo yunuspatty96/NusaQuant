@@ -303,9 +303,32 @@ def get_companies(api_key: str, *, where: str | None = None,
 #: The classification columns a screen can attach to each company.
 CLASSIFICATION_FIELDS = ("sector", "sub_sector", "industry")
 
+#: Dividend fields the screener carries, mapped to the metric names used here.
+#: These are TRAILING values as of the screen, not point-in-time history, so
+#: they are shown and never modelled — see FeatureSpec.point_in_time.
+DIVIDEND_FIELDS: dict[str, str] = {
+    "dividend_ttm": "dividend",
+    "payout_ratio": "dpr",
+    "yield_ttm": "dividend_yield",
+}
+
+
+def _names_field(field: str, *, keep_nulls: bool = False) -> str:
+    """A condition that makes the screener return a field.
+
+    ``query_values`` carries whatever the query mentions, so a field is
+    requested by putting it in the where clause. ``IS NOT NULL`` does that
+    without narrowing anything for a field every company has — but for
+    dividends it would silently drop every company that does not pay one, so
+    those are named with a condition that is true for every row instead.
+    """
+    return f"({field} IS NOT NULL or {field} IS NULL)" if keep_nulls \
+        else f"{field} IS NOT NULL"
+
 
 def get_company_classification(api_key: str, *, where: str | None = None,
                                order_by: str = "-market_cap", limit: int = 200,
+                               dividends: bool = False,
                                raw: list | None = None) -> pd.DataFrame:
     """Symbol, name and IDX classification for the whole universe. 1 credit.
 
@@ -323,8 +346,10 @@ def get_company_classification(api_key: str, *, where: str | None = None,
     call costs a credit either way and the payload is worth seeing when the
     parse comes back thinner than expected.
     """
-    conditions = [c for c in ([where] if where else [])
-                  + [f"{f} IS NOT NULL" for f in CLASSIFICATION_FIELDS]]
+    conditions = ([where] if where else []) \
+        + [_names_field(f) for f in CLASSIFICATION_FIELDS]
+    if dividends:
+        conditions += [_names_field(f, keep_nulls=True) for f in DIVIDEND_FIELDS]
     payload = api_request("companies/", api_key, {
         "where": " and ".join(conditions),
         "order_by": order_by,
@@ -346,6 +371,9 @@ def get_company_classification(api_key: str, *, where: str | None = None,
             # The endpoint has been seen to key these either at the top level
             # or inside query_values, so both are accepted.
             record[field] = values.get(field, row.get(field))
+        if dividends:
+            for source, target in DIVIDEND_FIELDS.items():
+                record[target] = _to_float(values.get(source, row.get(source)))
         records.append(record)
     frame = pd.DataFrame(records)
     return frame.drop_duplicates("symbol").reset_index(drop=True)
@@ -598,6 +626,28 @@ def company_names(base: str = "data") -> dict[str, str]:
             if isinstance(getattr(row, "company_name", None), str)}
 
 
+def company_dividends(ticker: str, base: str = "data") -> dict[str, float]:
+    """Trailing dividend figures from the cached screen, where present."""
+    universe = load_universe(base)
+    if universe.empty or "symbol" not in universe.columns:
+        return {}
+    match = universe[universe["symbol"].map(normalise_symbol) == normalise_symbol(ticker)]
+    if match.empty:
+        return {}
+    row = match.iloc[0]
+    return {m: _to_float(row[m]) for m in DIVIDEND_FIELDS.values()
+            if m in match.columns and np.isfinite(_to_float(row.get(m)))}
+
+
+def screen_as_of(base: str = "data") -> str:
+    """The date the screener snapshot was taken, or an empty string."""
+    universe = load_universe(base)
+    if universe.empty or "screened_at" not in universe.columns:
+        return ""
+    values = universe["screened_at"].dropna()
+    return str(values.iloc[0]) if len(values) else ""
+
+
 def company_classification(ticker: str, base: str = "data") -> dict[str, str]:
     """Sector, sub-sector and industry from the cached screen, where present."""
     universe = load_universe(base)
@@ -686,6 +736,13 @@ class FeatureSpec:
     # tree that splits on the level is splitting on company size. Only
     # scale-free ratios are modelled.
     modelled: bool = True
+    # False for a figure that arrives as a snapshot from the screener rather
+    # than reconstructed at each historical date. Such a value is true as of
+    # the screen and only as of the screen, so it may be displayed but must
+    # never reach the model: feeding today's dividend yield to a 2022
+    # observation is look-ahead, the precise failure the leakage audit exists
+    # to catch.
+    point_in_time: bool = True
 
     @property
     def title(self) -> str:
@@ -762,6 +819,20 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "Profit generated per unit of revenue.", "percent",
                 "Net Profit Margin"),
 
+    # — 5. Dividend ---------------------------------------------------
+    # Trailing figures from the screener, not point-in-time history. Shown,
+    # never modelled — see FeatureSpec.point_in_time.
+    FeatureSpec("dividend", "Dividend", "Dividend",
+                "Cash paid per share over the trailing twelve months.",
+                "currency", "", modelled=False, point_in_time=False),
+    FeatureSpec("dpr", "DPR", "Dividend",
+                "Share of earnings paid out rather than retained.", "percent",
+                "Dividend Payout Ratio", modelled=False, point_in_time=False),
+    FeatureSpec("dividend_yield", "Dividend Yield", "Dividend",
+                "Trailing dividend against the current price.", "percent", "",
+                modelled=False, point_in_time=False),
+
+    # — 6. Income Statement ------------------------------------------
     FeatureSpec("revenue", "Revenue", "Income Statement",
                 "Trailing 12-month revenue.", "currency", "", modelled=False),
     FeatureSpec("gross_profit", "Gross Profit", "Income Statement",
@@ -776,7 +847,7 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "Trailing 12-month profit after everything.", "currency", "",
                 modelled=False),
 
-    # — 6. Balance Sheet ---------------------------------------------
+    # — 7. Balance Sheet ---------------------------------------------
     FeatureSpec("cash", "Cash", "Balance Sheet",
                 "Cash and equivalents at the reporting date.", "currency", "",
                 modelled=False),
@@ -1745,6 +1816,11 @@ FEATURE_ABSENCE_REASON: dict[str, str] = {
     "npm": "Trailing 12-month revenue is zero or negative.",
     "gross_profit": "Not reported. Financial issuers do not file a cost of "
                     "revenue.",
+    "dividend": "No trailing dividend in the last screen. Either the company "
+                "pays none, or the universe has not been screened yet — run "
+                "`python train.py --screen`.",
+    "dpr": "Needs a trailing dividend and positive earnings.",
+    "dividend_yield": "Needs a trailing dividend from the screener.",
     "ebitda": "Not reported for this period.",
 }
 
