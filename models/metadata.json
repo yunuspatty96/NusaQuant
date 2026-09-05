@@ -1,0 +1,65 @@
+{
+  "version": "0.3.0",
+  "model": "selected per horizon from xgb_depth1, xgb_depth2, logistic_l2, logistic_l2_strong",
+  "feature_set": [
+    "pb",
+    "ps",
+    "roe",
+    "roa",
+    "net_profit_margin",
+    "debt_to_equity",
+    "accruals"
+  ],
+  "horizons": [
+    "6m",
+    "12m"
+  ],
+  "universe_label": "NusaQuant Liquid IDX Universe (market cap > IDR 1T)",
+  "universe": [
+    "AMMN",
+    "ASII",
+    "BBCA",
+    "BBNI",
+    "BBRI",
+    "BMRI",
+    "BREN",
+    "BRPT",
+    "BYAN",
+    "DCII",
+    "DSSA",
+    "MORA",
+    "SRAJ",
+    "TLKM",
+    "TPIA"
+  ],
+  "training_end_date": "2026-06-29",
+  "dataset_rows": 236,
+  "n_tickers": 15,
+  "reporting_lag_days": 90,
+  "snapshot_as_of": "2026-06-30",
+  "validation": {
+    "6m": {
+      "model": "xgb_depth2",
+      "shrinkage_weight": 0.05,
+      "folds": 9,
+      "roc_auc": 0.46973935786435783,
+      "reliability": "No measurable edge",
+      "has_edge": false
+    },
+    "12m": {
+      "model": "xgb_depth1",
+      "shrinkage_weight": 0.05,
+      "folds": 5,
+      "roc_auc": 0.47800000000000004,
+      "reliability": "No measurable edge",
+      "has_edge": false
+    }
+  },
+  "limitations": {
+    "survivorship_bias": "The Sectors universe reflects securities available today, so companies delisted during the study period are absent and historical performance is biased upward.",
+    "reporting_lag": "A flat 90-day lag stands in for the real publication date, which the API does not reliably expose.",
+    "overlapping_targets": "Consecutive quarterly observations share most of their forward window, so the effective sample is smaller than the row count.",
+    "market_factor": "The target is the sign of an absolute return, and over 6-12 months that sign is dominated by the direction of the market rather than by anything specific to the company. Per-quarter base rates in this panel range from 0.00 to 1.00. Cross-sectional fundamentals carry no information about the market's own direction, which caps how well any model built on them can score.",
+    "cross_section_width": "Fifteen tickers means each quarterly cross-section is fifteen points wide. Widening the universe adds far more effective sample than adding history to the same names."
+  }
+}

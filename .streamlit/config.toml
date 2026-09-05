@@ -1,0 +1,11 @@
+# Neutral surface, one accent. Green means upside probability and red means
+# risk, so they still carry meaning when they appear.
+[theme]
+primaryColor = "#1D4E6F"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#1A1D23"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

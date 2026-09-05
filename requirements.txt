@@ -1,0 +1,12 @@
+# Pinned to the versions this project was built and tested on.
+# A pickled scikit-learn/xgboost pipeline is not portable across major
+# versions: if you change these, re-run `python train.py`.
+streamlit==1.63.0
+plotly==7.0.0
+pandas==3.0.2
+numpy==2.4.4
+pyarrow==25.0.1
+requests==2.33.1
+scikit-learn==1.8.0
+xgboost==3.4.1
+joblib==1.5.3

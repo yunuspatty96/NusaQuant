@@ -1,0 +1,757 @@
+"""
+NusaQuant — IDX Market Intelligence
+===================================
+
+    streamlit run app.py
+
+Two modes:
+
+* **Cached snapshot** (default) — runs the whole dashboard on the real Sectors
+  data collected during training. Costs zero API credits. Labelled with the
+  date the snapshot was taken, because serving month-old figures as though
+  they were live would be a quiet lie.
+* **Live Sectors API** — today's figures, for companies outside the snapshot.
+  Costs credits, and the app says how many before you spend them.
+
+No API key is needed for cached mode. In live mode the key is typed into the
+sidebar, held in session only, and never logged or written to disk.
+
+Research and decision support only. Probabilities are model estimates, not
+guarantees and not financial advice. No LLM anywhere — every sentence comes
+from a template in nusaquant.py.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from pathlib import Path
+from typing import Any
+
+import joblib
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+import nusaquant as nq
+
+MODELS_DIR = Path("models")
+CACHE_TTL = 6 * 60 * 60
+
+ACCENT, POSITIVE, NEGATIVE, MUTED, GRID = "#1D4E6F", "#1B7F4B", "#B3341F", "#5C6672", "#E4E7EB"
+PRICE_WINDOWS = {"1Y": 1, "3Y": 3, "5Y": 5}
+
+#: Live-mode cost for one company: 8 quarters (the minimum for TTM plus
+#: one-year growth) plus one report section.
+QUARTERS_FOR_INFERENCE = 8
+CREDITS_PER_COMPANY = QUARTERS_FOR_INFERENCE + 1
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MODELS
+# ══════════════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner=False)
+def load_models() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load the two artifacts once per session, not once per rerun."""
+    models: dict[str, Any] = {}
+    for horizon in nq.HORIZON_TRADING_DAYS:
+        path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
+        if path.exists():
+            try:
+                models[horizon] = joblib.load(path)
+            except Exception:
+                continue
+    metadata = {}
+    meta_path = MODELS_DIR / "metadata.json"
+    if meta_path.exists():
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except ValueError:
+            metadata = {}
+    return models, metadata
+
+
+def diagnose_models() -> dict[str, Any]:
+    """Explain *why* no models loaded, not merely that none did.
+
+    Three very different causes share one symptom, and telling them apart from
+    inside the app saves a long guessing game.
+    """
+    report = {"dir": str(MODELS_DIR.resolve()), "exists": MODELS_DIR.exists(),
+              "files": [], "loaded": [], "errors": []}
+    if MODELS_DIR.exists():
+        report["files"] = sorted(p.name for p in MODELS_DIR.iterdir() if p.is_file())
+    for horizon in nq.HORIZON_TRADING_DAYS:
+        path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
+        if not path.exists():
+            continue
+        try:
+            joblib.load(path); report["loaded"].append(path.name)
+        except Exception as exc:
+            report["errors"].append(f"{path.name}: {type(exc).__name__}: {exc}"[:300])
+    if report["loaded"]:
+        report["diagnosis"] = "ok"
+    elif report["errors"]:
+        report["diagnosis"] = "unreadable"
+    else:
+        report["diagnosis"] = "absent"
+    return report
+
+
+def predict(features: pd.DataFrame, artifact: dict[str, Any] | None,
+            horizon: str) -> dict[str, Any]:
+    """Score one company, or refuse and say why.
+
+    Refuses rather than filling absent inputs with zeros to force a number out.
+    A confident-looking probability built on missing data is worse than none.
+    """
+    if not artifact:
+        return {"available": False, "reason": f"No trained model for the {horizon} horizon."}
+    model_features = list(artifact.get("feature_names", []))
+    missing_columns = [c for c in model_features if c not in features.columns]
+    if missing_columns:
+        return {"available": False,
+                "reason": "Some model inputs are unavailable for this company.",
+                "missing": missing_columns}
+
+    frame = features[model_features]
+    completeness = nq.data_quality(frame, model_features)
+    if completeness < nq.MIN_DATA_COMPLETENESS:
+        absent = [c for c in model_features if pd.isna(frame.iloc[0][c])]
+        return {"available": False,
+                "reason": "Too many model inputs are missing for a reliable prediction.",
+                "missing": absent, "data_quality": completeness}
+    try:
+        probability = float(artifact["pipeline"].predict_proba(frame)[0, 1])
+    except Exception:
+        return {"available": False, "reason": "The model could not score this company."}
+    return {"available": True, "probability": probability, "data_quality": completeness}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# DATA ACCESS
+# ══════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def snapshot_tickers() -> list[str]:
+    return nq.cached_tickers("quarterly")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def snapshot_as_of() -> str:
+    return nq.cache_as_of()
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def snapshot_data(ticker: str, kind: str) -> pd.DataFrame:
+    return nq.load_from_cache(ticker, kind)
+
+
+# The API key is part of these cache keys, which is correct — two keys must
+# not share cached responses. Nothing is persisted (no persist= argument), so
+# the key never reaches disk.
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def check_key(api_key: str) -> bool:
+    return nq.validate_api_key(api_key)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def live_universe(api_key: str, where: str, limit: int) -> pd.DataFrame:
+    return nq.get_companies(api_key, where=where, limit=limit)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def live_report(ticker: str, api_key: str) -> dict[str, Any]:
+    return nq.get_company_report(api_key, ticker, ("overview",))
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def live_quarterly(ticker: str, api_key: str, n: int) -> pd.DataFrame:
+    return nq.get_quarterly_financials(api_key, ticker, n)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def live_prices(ticker: str, start: str, end: str, api_key: str) -> pd.DataFrame:
+    return nq.get_daily_history(api_key, ticker, start, end)
+
+
+def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
+    """Assemble one company's features, from the snapshot or from the API.
+
+    Both paths end in nq.features_frame, the same function the training script
+    used at every historical observation, so a feature cannot mean one thing
+    in training and another here.
+    """
+    if offline:
+        quarterly = snapshot_data(ticker, "quarterly")
+        prices = snapshot_data(ticker, "prices")
+        if quarterly.empty:
+            raise nq.SectorsAPIError(f"{ticker} is not in the cached snapshot.")
+        market_cap = close = np.nan
+        if not prices.empty:
+            latest = prices.sort_values("date").iloc[-1]
+            market_cap = nq._to_float(latest.get("market_cap"))
+            close = nq._to_float(latest.get("close"))
+        overview = {"market_cap": market_cap, "last_close_price": close}
+        name = ticker
+    else:
+        report = live_report(ticker, api_key)
+        quarterly = live_quarterly(ticker, api_key, QUARTERS_FOR_INFERENCE)
+        overview = (report or {}).get("overview") or {}
+        market_cap = overview.get("market_cap")
+        prices = pd.DataFrame()
+        name = (report or {}).get("company_name") or ticker
+
+    return {
+        "ticker": nq.normalise_symbol(ticker),
+        "name": name,
+        "overview": overview,
+        "quarterly": quarterly,
+        "prices": prices,
+        "features": nq.features_frame(quarterly, market_cap),
+        "latest_period": quarterly["report_date"].max() if not quarterly.empty else pd.NaT,
+        "n_quarters": len(quarterly),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# UI HELPERS
+# ══════════════════════════════════════════════════════════════════════
+
+def configure_page() -> None:
+    st.set_page_config(page_title="NusaQuant — IDX Market Intelligence",
+                       page_icon="◧", layout="wide")
+    # Tabular figures: this dashboard is mostly numbers, and a column of
+    # prices that does not align is harder to scan.
+    st.markdown(f"""<style>
+      html, body, [class*="css"] {{ font-feature-settings: "tnum" 1; }}
+      [data-testid="stMetricValue"] {{ font-size:1.5rem; font-variant-numeric:tabular-nums; }}
+      [data-testid="stMetricLabel"] {{ color:{MUTED}; }}
+      .nq-title {{ font-size:1.9rem; font-weight:650; letter-spacing:-.01em; margin-bottom:.1rem; }}
+      .nq-sub {{ color:{MUTED}; font-size:.95rem; }}
+      .nq-sec {{ font-size:1.1rem; font-weight:600; margin:1.4rem 0 .5rem;
+                 padding-bottom:.3rem; border-bottom:1px solid {GRID}; }}
+      .nq-note {{ color:{MUTED}; font-size:.86rem; line-height:1.5; }}
+      div[data-testid="stDataFrame"] {{ font-variant-numeric:tabular-nums; }}
+    </style>""", unsafe_allow_html=True)
+
+
+def section(title: str) -> None:
+    st.markdown(f'<div class="nq-sec">{title}</div>', unsafe_allow_html=True)
+
+
+def note(text: str) -> None:
+    st.markdown(f'<div class="nq-note">{text}</div>', unsafe_allow_html=True)
+
+
+def probability_bar(probability: float) -> None:
+    """A flat bar. No gauges, no gradients."""
+    if not np.isfinite(nq._to_float(probability)):
+        st.write("—"); return
+    pct = max(0.0, min(1.0, probability)) * 100
+    colour = POSITIVE if probability >= .5 else MUTED
+    st.markdown(f"""<div style="margin:.2rem 0 .6rem;">
+      <div style="background:{GRID};border-radius:3px;height:10px;width:100%;">
+        <div style="width:{pct:.1f}%;background:{colour};height:10px;border-radius:3px;"></div>
+      </div></div>""", unsafe_allow_html=True)
+
+
+def show_error(error: nq.SectorsAPIError) -> None:
+    st.error(f"{error.message}\n\n{nq.API_HELP}")
+    if error.detail:
+        with st.expander("Technical details"):
+            st.code(error.detail, language="text")
+
+
+def render_missing_models() -> None:
+    """Never invent a prediction to fill the gap — explain the actual cause."""
+    report = diagnose_models()
+    if report["diagnosis"] == "unreadable":
+        st.error("**Model files exist but could not be loaded.**\n\n"
+                 "Almost always a library version mismatch: a pickled pipeline "
+                 "is not portable across major scikit-learn or xgboost versions. "
+                 "Re-run `python train.py`, or match the versions in "
+                 "`requirements.txt`.")
+    else:
+        st.warning("**No trained models found.**\n\n"
+                   "NusaQuant will not show a probability it has not trained.")
+        st.markdown("""
+Train locally, then commit the result:
+
+```bash
+export SECTORS_API_KEY=your-key-here
+python train.py
+
+git add -f models/ data/cache/
+git commit -m "Add trained models and snapshot"
+git push
+```
+
+`train.py` cannot run on Streamlit Cloud, so `models/` must be committed.
+See **DEPLOY.md**.
+        """)
+    with st.expander("Diagnostics"):
+        st.write(f"**Looking in:** `{report['dir']}`")
+        st.write(f"**Exists:** {report['exists']}")
+        st.code("\n".join(report["files"]) or "(no files)", language="text")
+        for error in report["errors"]:
+            st.code(error, language="text")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════════
+
+def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
+    snapshot = snapshot_tickers()
+    with st.sidebar:
+        st.markdown("### NusaQuant")
+
+        if snapshot:
+            source = st.radio("Data source", ["Cached snapshot", "Live Sectors API"],
+                              help="The snapshot is real Sectors data collected "
+                                   "during training. It costs no credits, but it "
+                                   "is a snapshot rather than today's figures.")
+        else:
+            source = "Live Sectors API"
+        offline = source == "Cached snapshot"
+
+        api_key = ""
+        if offline:
+            st.success(f"Cached mode — 0 API credits.\n\n"
+                       f"Snapshot as of {snapshot_as_of()} · "
+                       f"{len(snapshot)} companies")
+        else:
+            api_key = st.text_input(
+                "Sectors API key", value=st.session_state.get("api_key", ""),
+                type="password",
+                help="Held in this session only. Never logged or saved.")
+            if st.button("Connect", width="stretch", type="primary"):
+                st.session_state["api_key"] = api_key.strip()
+            api_key = st.session_state.get("api_key", "")
+            if api_key:
+                if check_key(api_key):
+                    st.success("Sectors API connected")
+                else:
+                    st.error("Could not authenticate with that key.")
+                    api_key = ""
+            st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
+
+        st.divider()
+        mode = st.radio("Analysis", ["Single Stock", "Best 10"],
+                        label_visibility="collapsed")
+        window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
+
+        st.divider()
+        if metadata:
+            st.caption(f"XGBoost v{metadata.get('version','—')} · "
+                       f"{len(metadata.get('feature_set', []))} features · "
+                       f"trained to {metadata.get('training_end_date','—')}")
+        else:
+            st.caption("No trained models loaded.")
+
+    return {"offline": offline, "api_key": api_key, "snapshot": snapshot,
+            "mode": mode, "window": window}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SINGLE STOCK
+# ══════════════════════════════════════════════════════════════════════
+
+def render_profile(company: dict, predictions: dict) -> None:
+    st.markdown(f"### {company['ticker']}")
+    st.markdown(f"<div class='nq-sub'>{company['name']}</div>", unsafe_allow_html=True)
+    overview = company["overview"]
+    if overview.get("sector"):
+        st.caption(f"{overview.get('sector')} · {overview.get('sub_sector', '—')}")
+
+    columns = st.columns(4)
+    columns[0].metric("Latest close",
+                      nq.format_rupiah(overview.get("last_close_price"), compact=False))
+    columns[1].metric("Market cap", nq.format_rupiah(overview.get("market_cap")))
+    for column, horizon in ((columns[2], "6m"), (columns[3], "12m")):
+        result = predictions.get(horizon, {})
+        label = f"{'6' if horizon == '6m' else '12'}M probability"
+        column.metric(label, f"{result['probability'] * 100:.0f}%"
+                      if result.get("available") else "—")
+
+    period = company["latest_period"]
+    period_text = "—" if pd.isna(period) else f"Q{pd.Timestamp(period).quarter} {pd.Timestamp(period).year}"
+    st.caption(f"Latest financial period: {period_text} · "
+               f"Generated {dt.datetime.now():%Y-%m-%d %H:%M}")
+
+
+def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.DataFrame:
+    section(f"Price history — {window}")
+    years = PRICE_WINDOWS[window]
+
+    if offline:
+        prices = company["prices"]
+        if not prices.empty:
+            prices = prices[prices["date"] >= prices["date"].max() - pd.DateOffset(years=years)]
+    else:
+        # Lazy: only the selected window is ever requested.
+        end = dt.date.today()
+        start = end - dt.timedelta(days=365 * years + 5)
+        try:
+            prices = live_prices(company["ticker"], start.isoformat(), end.isoformat(), api_key)
+        except nq.SectorsAPIError as error:
+            show_error(error); return pd.DataFrame()
+
+    if prices.empty:
+        st.info("No price history available for this window.")
+        return prices
+
+    figure = go.Figure(go.Scatter(
+        x=prices["date"], y=prices["close"], mode="lines",
+        line={"color": ACCENT, "width": 1.6},
+        hovertemplate="%{x|%d %b %Y}<br>Rp %{y:,.0f}<extra></extra>"))
+    figure.update_layout(height=320, margin={"l": 0, "r": 0, "t": 10, "b": 0},
+                         plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                         hovermode="x unified",
+                         xaxis={"showgrid": False, "linecolor": GRID},
+                         yaxis={"gridcolor": GRID, "title": "Close (IDR)"})
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    return prices
+
+
+def render_features(company: dict, model_features: list[str]) -> None:
+    section("Fundamental features used by the model")
+    row = company["features"].iloc[0]
+    records = [{
+        "Feature": spec.label,
+        "Value": nq.format_feature(spec.name, row.get(spec.name)),
+        "Category": spec.category,
+        "Meaning": spec.meaning,
+    } for spec in nq.FEATURE_SCHEMA]
+    st.dataframe(pd.DataFrame(records), width="stretch", hide_index=True,
+                 column_config={"Meaning": st.column_config.TextColumn(width="large")})
+    note("Values are as reported for the latest available financial period. A "
+         "high or low reading is not automatically good or bad — the model "
+         "weighs these together rather than applying a rule to any single one.")
+
+
+def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
+    months = "6" if horizon == "6m" else "12"
+    section(f"{months}-month outlook")
+
+    if not result.get("available"):
+        st.warning(result.get("reason", "Prediction unavailable."))
+        if result.get("missing"):
+            with st.expander("Technical details"):
+                st.code(", ".join(result["missing"]), language="text")
+        return
+
+    probability = result["probability"]
+    reliability = (artifact or {}).get("reliability", {})
+    metrics = (artifact or {}).get("validation_metrics", {})
+    has_edge = bool((artifact or {}).get("has_edge", reliability.get("has_edge", True)))
+
+    left, right = st.columns([1, 2])
+    with left:
+        st.metric("Probability of positive return", f"{probability * 100:.0f}%")
+        st.caption(nq.probability_band(probability, has_edge))
+    with right:
+        probability_bar(probability)
+        note(nq.explain_probability(probability, horizon, has_edge))
+
+    columns = st.columns(4)
+    columns[0].metric("Model reliability", reliability.get("label", "Unknown"))
+    columns[1].metric("Out-of-sample ROC-AUC",
+                      f"{metrics.get('roc_auc', float('nan')):.3f}"
+                      if np.isfinite(nq._to_float(metrics.get("roc_auc"))) else "—")
+    columns[2].metric("Validation folds", (artifact or {}).get("validation_folds", "—"))
+    columns[3].metric("Data quality", f"{result.get('data_quality', 0) * 100:.0f}%")
+
+    if not has_edge:
+        st.warning(
+            "**This model has no measurable edge.** Across purged walk-forward "
+            "folds it did not rank winners above losers by more than chance, so "
+            "its probabilities are deliberately shrunk toward the historical "
+            "base rate. Read the number as *how often stocks in this universe "
+            "rose over this horizon*, not as a view on this company. The limit "
+            "is the size of the training panel — 15 tickers — not the algorithm.")
+    elif reliability.get("label") == "Weak":
+        st.warning("This model provides limited predictive separation on "
+                   "out-of-sample data. Treat the probability as weak evidence, "
+                   "not a signal.")
+
+    with st.expander("How was this validated?"):
+        st.write(nq.explain_reliability(reliability.get("label", "Unknown"), horizon))
+        st.write(nq.EXPLANATIONS["probability"])
+        baseline = (artifact or {}).get("baseline_roc_auc")
+        if baseline:
+            st.write(f"**Versus a baseline.** A model that always predicts the "
+                     f"class prior scored {baseline:.3f} on the same folds. "
+                     f"ML is only worth using if it clearly beats that.")
+        weight = nq._to_float((artifact or {}).get("shrinkage_weight"))
+        if np.isfinite(weight):
+            unshrunk = (artifact or {}).get("validation_metrics_unshrunk", {})
+            st.write(
+                f"**Shrinkage {weight:.2f}.** The served probability is "
+                f"`{weight:.2f} x model + {1 - weight:.2f} x base rate`, with the "
+                f"weight fitted leave-one-fold-out on out-of-sample log loss. "
+                f"Blending is monotone, so the ranking is untouched; only the "
+                f"spread of the numbers changes. Before shrinkage the same "
+                f"model scored ROC-AUC "
+                f"{nq._to_float(unshrunk.get('roc_auc')):.3f}.")
+        leaderboard = (artifact or {}).get("leaderboard", [])
+        if leaderboard:
+            st.write("**Candidates considered** (ranked on out-of-sample log loss):")
+            st.dataframe(pd.DataFrame(leaderboard).round(4),
+                         width="stretch", hide_index=True)
+        rows = [{k: v for k, v in metrics.items() if k in
+                 ("roc_auc", "pr_auc", "brier", "log_loss", "balanced_accuracy",
+                  "precision", "recall", "base_rate", "roc_auc_std", "n")}]
+        st.dataframe(pd.DataFrame(rows).round(4), width="stretch", hide_index=True)
+        folds = (artifact or {}).get("fold_metrics", [])
+        if folds:
+            st.write("**Per validation fold** (purged walk-forward, one fold per "
+                     "quarterly rebalance):")
+            frame = pd.DataFrame(folds)
+            keep = [c for c in ("validation_year", "n_train", "n_validation",
+                                "roc_auc", "brier", "base_rate") if c in frame.columns]
+            st.dataframe(frame[keep].round(4), width="stretch", hide_index=True)
+        importance = (artifact or {}).get("feature_importance", [])
+        if importance:
+            st.write("**Feature importance** (a diagnostic — importance is not causality):")
+            st.dataframe(pd.DataFrame(importance).round(4), width="stretch", hide_index=True)
+
+
+def render_risk(prices: pd.DataFrame, window: str) -> None:
+    section("Historical risk")
+    if prices.empty:
+        st.info("Risk cannot be measured without price history."); return
+    years = PRICE_WINDOWS[window]
+    metrics = nq.risk_metrics(prices, years)
+    risk = nq.risk_score(metrics)
+
+    columns = st.columns(4)
+    columns[0].metric("Risk", risk["band"])
+    columns[1].metric("Annualised volatility", nq.format_percent(metrics["volatility"], 0))
+    columns[2].metric("Maximum drawdown", nq.format_percent(metrics["max_drawdown"], 0))
+    columns[3].metric("Downside volatility", nq.format_percent(metrics["downside_volatility"], 0))
+    note(f"Measured over {years} year{'s' if years > 1 else ''}. " + nq.EXPLANATIONS["risk"])
+
+    with st.expander("Drawdown"):
+        history = prices.sort_values("date")
+        close = history["close"].astype(float)
+        figure = go.Figure(go.Scatter(
+            x=history["date"], y=close / close.cummax() - 1.0, mode="lines",
+            line={"color": NEGATIVE, "width": 1.2}, fill="tozeroy",
+            fillcolor="rgba(179,52,31,.10)",
+            hovertemplate="%{x|%d %b %Y}<br>%{y:.1%}<extra></extra>"))
+        figure.update_layout(height=240, margin={"l": 0, "r": 0, "t": 10, "b": 0},
+                             plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                             xaxis={"showgrid": False, "linecolor": GRID},
+                             yaxis={"gridcolor": GRID, "tickformat": ".0%"})
+        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+
+def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -> None:
+    section("Stock analysis")
+    if companies.empty:
+        st.error("No companies available."); return
+
+    labels = {f"{r.symbol} — {r.company_name}": r.symbol for r in companies.itertuples()}
+    keys = list(labels)
+    chosen = st.session_state.get("ticker")
+    index = next((i for i, k in enumerate(keys) if labels[k] == chosen), 0)
+
+    left, right = st.columns([3, 1])
+    selection = left.selectbox("Select stock", keys, index=index)
+    if right.button("Analyze", width="stretch", type="primary"):
+        st.session_state["ticker"] = labels[selection]
+        st.session_state["analysed"] = labels[selection]
+    ticker = labels[selection]
+
+    if st.session_state.get("analysed") != ticker:
+        st.info("Select a stock and press **Analyze**.")
+        st.caption("Cached mode — 0 credits." if controls["offline"]
+                   else f"About {CREDITS_PER_COMPANY} credits per analysis.")
+        return
+
+    try:
+        with st.spinner(f"Loading {ticker}…"):
+            company = load_company(ticker, controls["api_key"], controls["offline"])
+    except nq.SectorsAPIError as error:
+        show_error(error); return
+
+    if company["quarterly"].empty:
+        st.error(f"No quarterly financial data available for {ticker}."); return
+
+    predictions = {h: predict(company["features"], models.get(h), h)
+                   for h in nq.HORIZON_TRADING_DAYS}
+    render_profile(company, predictions)
+
+    if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
+        st.warning(f"Only {company['n_quarters']} quarterly reports available. "
+                   f"NusaQuant wants at least {nq.MIN_QUARTERS_FOR_PREDICTION} "
+                   f"before treating a fundamental prediction as meaningful.")
+
+    prices = render_chart(company, controls["api_key"], controls["window"], controls["offline"])
+    model_features = list((models.get("6m") or {}).get("feature_names", []))
+    render_features(company, model_features)
+
+    if not models:
+        render_missing_models()
+    else:
+        render_prediction(predictions["6m"], models.get("6m"), "6m")
+        render_prediction(predictions["12m"], models.get("12m"), "12m")
+
+    render_risk(prices, controls["window"])
+    st.caption(nq.DISCLAIMER)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BEST 10
+# ══════════════════════════════════════════════════════════════════════
+
+def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> None:
+    section("Best 10 stocks")
+    if not models:
+        render_missing_models(); return
+
+    horizon = "6m" if st.radio("Horizon", ["6 Months", "12 Months"], horizontal=True,
+                               label_visibility="collapsed") == "6 Months" else "12m"
+    artifact = models.get(horizon)
+    if not artifact:
+        st.info("No model for this horizon."); return
+
+    if not artifact.get("has_edge", True):
+        st.warning(
+            "**This ranking is not evidence.** The model for this horizon showed "
+            "no measurable out-of-sample edge, so the order below reflects how it "
+            "sorts fundamentals in training, not a validated ability to pick "
+            "winners. It is shown for inspection of the pipeline, not as a "
+            "shortlist to act on.")
+
+    size = st.slider("Universe size", 5, max(5, len(companies)),
+                     min(len(companies), 20), step=5)
+    if controls["offline"]:
+        st.caption("Cached mode — this ranking costs 0 API credits.")
+    else:
+        st.caption(f"Estimated cost: about {size * CREDITS_PER_COMPANY:,} API credits.")
+
+    if not st.button("Show best 10", type="primary"):
+        st.info("Press the button to rank the universe."); return
+
+    universe = companies.head(size)
+    rows, metrics_by_ticker = [], {}
+    progress = st.progress(0.0, text="Scoring…")
+
+    for index, company_row in enumerate(universe.itertuples(), start=1):
+        progress.progress(index / len(universe), text=f"Scoring {company_row.symbol}")
+        record = {"ticker": company_row.symbol, "company_name": company_row.company_name,
+                  "probability": np.nan, "risk": "—", "data_quality": 0.0,
+                  "eligible": False, "reason": ""}
+        try:
+            company = load_company(company_row.symbol, controls["api_key"], controls["offline"])
+        except nq.SectorsAPIError as error:
+            record["reason"] = error.message; rows.append(record); continue
+
+        if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
+            record["reason"] = (f"Only {company['n_quarters']} quarterly reports "
+                                f"(minimum {nq.MIN_QUARTERS_FOR_PREDICTION})")
+            rows.append(record); continue
+
+        result = predict(company["features"], artifact, horizon)
+        if not result.get("available"):
+            record["reason"] = result.get("reason", "unavailable")
+            record["data_quality"] = result.get("data_quality", 0.0)
+            rows.append(record); continue
+
+        record.update({"probability": result["probability"], "eligible": True,
+                       "data_quality": result["data_quality"]})
+        if controls["offline"] and not company["prices"].empty:
+            metrics_by_ticker[company_row.symbol] = nq.risk_metrics(company["prices"], 1)
+        rows.append(record)
+    progress.empty()
+
+    ranked = pd.DataFrame(rows).sort_values("probability", ascending=False,
+                                            na_position="last").reset_index(drop=True)
+
+    # Risk is ranked across the shortlist, so "High" means high relative to
+    # these peers rather than against an arbitrary absolute threshold.
+    peers = list(metrics_by_ticker.values())
+    for ticker, metrics in metrics_by_ticker.items():
+        ranked.loc[ranked.ticker == ticker, "risk"] = nq.risk_score(metrics, peers)["band"]
+
+    qualified = ranked[ranked.eligible]
+    if qualified.empty:
+        st.error("No company met NusaQuant's minimum data-quality criteria."); return
+    if len(qualified) < 10:
+        st.info(f"Only {len(qualified)} stocks meet the minimum data-quality "
+                f"criteria, so the table is shorter than ten.")
+
+    top = qualified.head(10)
+    months = "6" if horizon == "6m" else "12"
+    st.markdown(f"#### Best {len(top)} — {months} month outlook")
+    st.dataframe(pd.DataFrame({
+        "Rank": range(1, len(top) + 1),
+        "Ticker": top.ticker.to_numpy(),
+        "Company": top.company_name.to_numpy(),
+        "Probability up": [f"{v * 100:.0f}%" for v in top.probability],
+        "Risk": top.risk.to_numpy(),
+        "Reliability": artifact.get("reliability", {}).get("label", "Unknown"),
+        "Data quality": [f"{v * 100:.0f}%" for v in top.data_quality],
+    }), width="stretch", hide_index=True)
+
+    note("<strong>How to read this table.</strong> Stocks are ranked by the "
+         "model's estimated probability of a positive return over the horizon. "
+         "Risk and reliability are shown separately because a high probability "
+         "does not automatically mean low risk.")
+
+    excluded = ranked[~ranked.eligible]
+    if not excluded.empty:
+        with st.expander(f"Excluded by quality gates ({len(excluded)})"):
+            st.dataframe(excluded[["ticker", "company_name", "reason"]],
+                         width="stretch", hide_index=True)
+    st.caption(nq.DISCLAIMER)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════
+
+def main() -> None:
+    configure_page()
+    st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nq-sub">IDX Market Intelligence · XGBoost probability '
+                'estimates for positive 6-month and 12-month returns.</div>',
+                unsafe_allow_html=True)
+
+    models, metadata = load_models()
+    controls = render_sidebar(metadata)
+
+    if controls["offline"]:
+        companies = pd.DataFrame({"symbol": controls["snapshot"],
+                                  "company_name": controls["snapshot"]})
+        st.info(f"Cached mode — no API credits are being spent. Figures are a "
+                f"real Sectors snapshot taken on {snapshot_as_of()}, not today's "
+                f"market.")
+    else:
+        if not controls["api_key"]:
+            st.info(nq.WELCOME)
+            st.caption(nq.DISCLAIMER)
+            return
+        try:
+            companies = live_universe(
+                controls["api_key"],
+                metadata.get("universe_filter") or "market_cap > 1000000000000", 50)
+        except nq.SectorsAPIError as error:
+            show_error(error); return
+        if companies.empty:
+            st.error("The Sectors universe came back empty."); return
+
+    if controls["mode"] == "Single Stock":
+        render_single_stock(companies, models, controls)
+    else:
+        render_best_10(companies, models, controls)
+
+
+if __name__ == "__main__":
+    main()

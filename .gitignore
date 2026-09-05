@@ -1,0 +1,29 @@
+# ── Secrets ──────────────────────────────────────────────────────────
+# The API key lives in your terminal environment, never in a file.
+.env
+.env.*
+.streamlit/secrets.toml
+*.key
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ── COMMITTED ON PURPOSE ─────────────────────────────────────────────
+# models/     -> train.py cannot run on Streamlit Cloud, so the deployed
+#                app needs the artifacts in the repo.
+# data/cache/ -> lets the dashboard run at zero API credits, and lets
+#                anyone re-train without buying the data again.
+# Both are real Sectors data. The app always shows the snapshot date.
+
+# Intermediate research table: large and rebuildable, so excluded.
+data/dataset.parquet
+
+# ── OS / editor ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
