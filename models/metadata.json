@@ -24,9 +24,11 @@
     "BBRI",
     "BMRI",
     "BREN",
+    "BRMS",
     "BRPT",
     "BYAN",
     "CASA",
+    "CUAN",
     "DCII",
     "DNET",
     "DSSA",
@@ -38,27 +40,28 @@
     "SMMA",
     "SRAJ",
     "TLKM",
-    "TPIA"
+    "TPIA",
+    "UNTR"
   ],
   "training_end_date": "2026-06-29",
-  "dataset_rows": 306,
-  "n_tickers": 22,
+  "dataset_rows": 339,
+  "n_tickers": 25,
   "reporting_lag_days": 90,
   "snapshot_as_of": "2026-06-30",
   "validation": {
     "6m": {
       "model": "xgb_depth1",
-      "shrinkage_weight": 0.45,
+      "shrinkage_weight": 0.7,
       "folds": 9,
-      "roc_auc": 0.5162194507432603,
+      "roc_auc": 0.5211451092782792,
       "reliability": "No measurable edge",
       "has_edge": false
     },
     "12m": {
       "model": "xgb_depth1",
-      "shrinkage_weight": 1.0,
+      "shrinkage_weight": 0.05,
       "folds": 5,
-      "roc_auc": 0.5153846153846153,
+      "roc_auc": 0.4978571428571429,
       "reliability": "No measurable edge",
       "has_edge": false
     }
