@@ -219,13 +219,33 @@ _st.cache_resource.clear(); _st.cache_data.clear()
 CALLS["n"] = 0
 at = AppTest.from_file(str(WORK/"app.py"), default_timeout=240)
 at.run()
-check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
-check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 # Radios are found by label, not index: adding the chart-style toggle shifted
 # every index and a positional lookup fails silently at the wrong widget.
 def radio(app, label):
     return next(r for r in app.radio if r.label == label)
 
+# Every view must actually open. Renaming a sidebar label twice left the
+# dispatch matching a string nothing produced any more, and selecting Sector
+# Ranking silently opened Top Picks instead — no error, just the wrong page.
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("appmod", WORK / "app.py")
+appmod = _ilu.module_from_spec(_spec)
+try:
+    _spec.loader.exec_module(appmod)
+except Exception:
+    pass
+for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_SECTOR):
+    _probe = AppTest.from_file(str(WORK / "app.py"), default_timeout=240)
+    _probe.run()
+    radio(_probe, "Analysis").set_value(_mode).run()
+    _heads = [str(h.value) for h in _probe.markdown if "nq-sec" in str(h.value)]
+    _opened = any(_mode in h for h in _heads) and not _probe.exception
+    check(f"view opens: {_mode[:34]}", _opened,
+          "" if _opened else (str(_probe.exception)[:120] if _probe.exception
+                              else "the heading for this view never rendered"))
+
+check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
+check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
       str(radio(at, "Data source").value))
 succ = " ".join(s.value for s in at.success)
@@ -260,7 +280,7 @@ if feat:
           "Not available." in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
-radio(at, "Analysis").set_value("Machine Learning Top Picks (Ranked)").run()
+radio(at, "Analysis").set_value(appmod.MODE_PICKS).run()
 btn = [b for b in at.button if "top picks" in (b.label or "").lower()]
 if btn:
     btn[0].click().run()

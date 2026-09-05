@@ -123,7 +123,7 @@ streamlit run app.py
 
 Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pastikan **6M probability** dan **12M probability** menampilkan angka persen, bukan `—`.
 
-Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Top Picks (Ranked)**, dan **Sector Ranking (Compare Ratios by Peer)**.
+Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Top Picks (Ranked)**, dan **Sector Ranking (Compare Ratios)**.
 
 Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 6M, 58% untuk 12M). Itu memang disengaja — lihat bagian terakhir dokumen ini.

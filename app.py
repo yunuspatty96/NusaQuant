@@ -47,6 +47,16 @@ ACCENT, POSITIVE, NEGATIVE, MUTED, GRID = "#1D4E6F", "#1B7F4B", "#B3341F", "#5C6
 COST = "#E8A0A0"
 PRICE_WINDOWS = {"1Y": 1, "3Y": 3, "5Y": 5}
 
+#: The three views, named once. These strings are the sidebar labels, the
+#: headings on the pages they open, and the values main() dispatches on, so a
+#: reworded label used to have to be changed in three places by hand — and
+#: twice it was not: the heading disagreed with the sidebar, and renaming the
+#: sector view left the dispatch matching a string nothing produced any more,
+#: which quietly opened Top Picks instead.
+MODE_SINGLE = "Single Stock Analysis"
+MODE_PICKS = "Machine Learning Top Picks (Ranked)"
+MODE_SECTOR = "Sector Ranking (Compare Ratios)"
+
 #: Plotly options shared by every chart. The mode bar is left at its default,
 #: which reveals it on hover rather than parking it permanently over the plot,
 #: and the buttons that do not apply to a time series are dropped. Drag to box
@@ -441,9 +451,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
 
         st.divider()
-        mode = st.radio("Analysis", ['Single Stock Analysis',
-                                     'Machine Learning Top Picks (Ranked)',
-                                     'Sector Ranking (Compare Ratios)'],
+        mode = st.radio("Analysis", [MODE_SINGLE, MODE_PICKS, MODE_SECTOR],
                         label_visibility="collapsed")
 
         st.divider()
@@ -970,7 +978,7 @@ def render_risk(prices: pd.DataFrame, window: str) -> None:
 
 
 def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -> None:
-    section('Single Stock Analysis')
+    section(MODE_SINGLE)
     if companies.empty:
         st.error("No companies available."); return
 
@@ -1037,7 +1045,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 # ══════════════════════════════════════════════════════════════════════
 
 def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> None:
-    section('Machine Learning Top Picks (Ranked)')
+    section(MODE_PICKS)
     if not models:
         render_missing_models(); return
 
@@ -1189,7 +1197,7 @@ def cached_sector_table(tickers: list[str]) -> pd.DataFrame:
 
 
 def render_sector_ranking(controls: dict) -> None:
-    section('Sector Ranking (Compare Ratios by Peer)')
+    section(MODE_SECTOR)
     universe = nq.load_universe()
     if universe.empty or "sector" not in universe.columns:
         st.warning("The cached universe carries no IDX classification yet. "
@@ -1352,9 +1360,9 @@ def main() -> None:
         if companies.empty:
             st.error("The Sectors universe came back empty."); return
 
-    if controls["mode"] == 'Single Stock Analysis':
+    if controls["mode"] == MODE_SINGLE:
         render_single_stock(companies, models, controls)
-    elif controls["mode"] == 'Sector Ranking (Compare Ratios by Peer)':
+    elif controls["mode"] == MODE_SECTOR:
         render_sector_ranking(controls)
     else:
         render_best_10(companies, models, controls)

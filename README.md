@@ -131,7 +131,7 @@ momentum, trend, income statement and every metric.
 by the machine learning model's probability, with risk and trend measured
 separately from price history alone.
 
-**Sector Ranking (Compare Ratios by Peer)** — pick a sector or sub-sector, rank
+**Sector Ranking (Compare Ratios)** — pick a sector or sub-sector, rank
 its companies on any ratio, and read each against the peer median. Multiples
 sort cheapest first and percentages sort most profitable first, derived from the
 metric's unit rather than listed by hand. Cached mode uses NusaQuant's own
