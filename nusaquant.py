@@ -351,6 +351,75 @@ def get_company_classification(api_key: str, *, where: str | None = None,
     return frame.drop_duplicates("symbol").reset_index(drop=True)
 
 
+#: Ratios the screener can attach to a peer screen, and the NusaQuant metric
+#: each one corresponds to. Sectors computes these itself, so they are close
+#: cousins of the locally computed ratios rather than the same number: the
+#: dashboard says which source it is showing rather than blending the two.
+SCREENER_RATIOS: dict[str, str] = {
+    "pe_ttm": "pe", "ps_ttm": "ps", "pb_mrq": "pbv",
+    "der_mrq": "der", "roa_ttm": "roa", "roe_ttm": "roe",
+}
+
+
+def get_sector_peers(api_key: str, *, level: str, name: str,
+                     limit: int = 200) -> pd.DataFrame:
+    """Every company in one sector with Sectors' own ratios. 1 credit.
+
+    ``level`` is ``sector`` or ``sub_sector``. The ratios come back through
+    ``query_values`` for the same reason the classification does — the endpoint
+    returns the fields the query names — so each is added to the where clause
+    as ``IS NOT NULL or <field> IS NULL``, a condition that is true for every
+    row and therefore names the field without filtering on it.
+    """
+    if level not in ("sector", "sub_sector"):
+        raise ValueError("level must be 'sector' or 'sub_sector'")
+    escaped = str(name).replace("'", "''")
+    clauses = [f"{level} = '{escaped}'"]
+    # Naming a ratio must not drop the companies that lack it: a bank with no
+    # gross margin still belongs in the comparison, shown as a blank.
+    clauses += [f"({f} IS NOT NULL or {f} IS NULL)" for f in SCREENER_RATIOS]
+    payload = api_request("companies/", api_key, {
+        "where": " and ".join(clauses),
+        "order_by": "-market_cap",
+        "limit": min(limit, 200),
+        "include_query_values": "true"})
+
+    rows = payload.get("results", []) if isinstance(payload, dict) else []
+    if not rows:
+        return pd.DataFrame()
+    records = []
+    for row in rows:
+        values = row.get("query_values") or {}
+        record = {"symbol": normalise_symbol(row.get("symbol", "")),
+                  "company_name": row.get("company_name")}
+        for source, target in SCREENER_RATIOS.items():
+            record[target] = _to_float(values.get(source, row.get(source)))
+        record["market_cap"] = _to_float(values.get("market_cap",
+                                                    row.get("market_cap")))
+        records.append(record)
+    return pd.DataFrame(records).drop_duplicates("symbol").reset_index(drop=True)
+
+
+def rank_ascending(name: str) -> bool:
+    """Cheapest first for a multiple, most profitable first for a percentage.
+
+    A low P/E is cheap and a low DER is safer, so multiples sort upward; a high
+    ROE is better, so percentages sort downward. Neither direction is a claim
+    that the stock is a better investment — only that the ratio reads better.
+    """
+    spec = FEATURE_BY_NAME.get(name)
+    return bool(spec is not None and spec.unit == "multiple")
+
+
+def peer_percentile(values: pd.Series, name: str) -> pd.Series:
+    """Where each company sits among its peers, 0 worst to 100 best."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.notna().sum() < 2:
+        return pd.Series(np.nan, index=values.index)
+    ranked = numeric.rank(pct=True, ascending=not rank_ascending(name))
+    return ranked * 100
+
+
 def get_company_report(api_key: str, ticker: str,
                        sections: Sequence[str] = ("overview",)) -> dict[str, Any]:
     """Company report. Costs 1 credit PER SECTION, so ask for one."""

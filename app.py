@@ -200,8 +200,10 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
             latest = prices.sort_values("date").iloc[-1]
             market_cap = nq._to_float(latest.get("market_cap"))
             close = nq._to_float(latest.get("close"))
-        overview = {"market_cap": market_cap, "last_close_price": close}
-        # The screener result is already cached, so the real name costs nothing.
+        # The screener result is already cached, so the name and the IDX
+        # classification both cost nothing here.
+        overview = {"market_cap": market_cap, "last_close_price": close,
+                    **nq.company_classification(ticker)}
         name = nq.company_name(ticker)
     else:
         report = live_report(ticker, api_key)
@@ -412,7 +414,9 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
 
         st.divider()
-        mode = st.radio("Analysis", ['Single Stock Analysis', 'Machine Learning Top Picks (Ranked 1-10)'],
+        mode = st.radio("Analysis", ['Single Stock Analysis',
+                                     'Machine Learning Top Picks (Ranked 1-10)',
+                                     'Sector Ranking (Compare Ratios by Peer)'],
                         label_visibility="collapsed")
         window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
 
@@ -1111,6 +1115,150 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
 
 
 # ══════════════════════════════════════════════════════════════════════
+# SECTOR RANKING
+# ══════════════════════════════════════════════════════════════════════
+
+RANKABLE = ["pe", "ps", "pbv", "pcf", "ev_ebitda", "der", "roa", "roe",
+            "gpm", "opm", "npm"]
+
+
+def cached_sector_table(tickers: list[str]) -> pd.DataFrame:
+    """NusaQuant's own ratios for cached companies, one row each."""
+    rows = []
+    for ticker in tickers:
+        quarterly = snapshot_data(ticker, "quarterly")
+        prices = snapshot_data(ticker, "prices")
+        if quarterly.empty or prices.empty:
+            continue
+        latest = prices.sort_values("date").iloc[-1]
+        metrics = nq.features_frame(quarterly,
+                                    nq._to_float(latest.get("market_cap")),
+                                    nq._to_float(latest.get("close"))).iloc[0]
+        rows.append({"symbol": ticker, "company_name": nq.company_name(ticker),
+                     "market_cap": nq._to_float(latest.get("market_cap")),
+                     **{m: nq._to_float(metrics.get(m)) for m in RANKABLE}})
+    return pd.DataFrame(rows)
+
+
+def render_sector_ranking(controls: dict) -> None:
+    section('Sector Ranking (Compare Ratios by Peer)')
+    universe = nq.load_universe()
+    if universe.empty or "sector" not in universe.columns:
+        st.warning("The cached universe carries no IDX classification yet. "
+                   "Run `python train.py --sectors` once — it costs 1 credit "
+                   "and covers every company in the screen.")
+        return
+
+    cached = set(nq.cached_tickers())
+    level_label = st.radio("Group by", ["Sector", "Sub-sector"], horizontal=True)
+    level = "sector" if level_label == "Sector" else "sub_sector"
+
+    if controls["offline"]:
+        # Only companies with collected data can be compared on NusaQuant's own
+        # ratios, so the picker counts those rather than the whole screen.
+        pool = universe[universe["symbol"].isin(cached)]
+        counts = pool[level].value_counts()
+        if counts.empty:
+            st.info("No cached company carries a classification yet.")
+            return
+        options = [f"{name} ({n})" for name, n in counts.items()]
+        chosen = st.selectbox(f"{level_label} — the number in brackets is how "
+                              f"many cached companies it holds", options)
+        name = chosen.rsplit(" (", 1)[0]
+        members = sorted(pool.loc[pool[level] == name, "symbol"])
+        with st.spinner(f"Scoring {len(members)} companies…"):
+            table = cached_sector_table(members)
+        source = ("NusaQuant's own point-in-time ratios, computed from the "
+                  "cached snapshot at zero credits")
+    else:
+        names = sorted(universe[level].dropna().unique())
+        name = st.selectbox(level_label, names)
+        st.caption("Live mode — this screen costs 1 API credit and returns "
+                   "every company in the group, not only the cached ones.")
+        if not st.button("Screen this group", type="primary"):
+            st.info("Press the button to run the screen."); return
+        try:
+            table = nq.get_sector_peers(controls["api_key"], level=level, name=name)
+        except nq.SectorsAPIError as error:
+            show_error(error); return
+        source = ("Sectors' own screener ratios (pe_ttm, pb_mrq, ps_ttm, "
+                  "der_mrq, roa_ttm, roe_ttm), as of the screen date")
+
+    if table.empty:
+        st.info("No company came back for this group."); return
+
+    present = [m for m in RANKABLE if m in table.columns
+               and table[m].notna().sum() >= 1]
+    if not present:
+        st.info("No ratio is available for this group."); return
+
+    rankable = [m for m in present if table[m].notna().sum() >= 2]
+    if not rankable:
+        st.warning(f"Only one company in {name} has a usable ratio, so there "
+                   f"is nothing to rank it against. The figures are shown, but "
+                   f"a peer comparison needs at least two.")
+
+    metric = st.selectbox(
+        "Rank by",
+        rankable or present,
+        format_func=lambda m: (f"{nq.FEATURE_BY_NAME[m].title} — "
+                               f"{'lowest first' if nq.rank_ascending(m) else 'highest first'}"))
+
+    ordered = table.sort_values(metric, ascending=nq.rank_ascending(metric),
+                                na_position="last").reset_index(drop=True)
+    display = pd.DataFrame({
+        "Rank": range(1, len(ordered) + 1),
+        "Ticker": ordered["symbol"].to_numpy(),
+        "Company": ordered["company_name"].to_numpy(),
+        "Market cap": [nq.format_rupiah(v) for v in ordered["market_cap"]],
+    })
+    for m in present:
+        display[nq.FEATURE_BY_NAME[m].label] = [
+            nq.format_feature(m, v) for v in ordered[m]]
+    st.dataframe(display, width="stretch", hide_index=True, column_config={
+        "Rank": st.column_config.NumberColumn(width="small"),
+        "Ticker": st.column_config.TextColumn(width="small"),
+        "Company": st.column_config.TextColumn(width="medium")})
+
+    # The median is the comparison that matters: a P/E of 14 means nothing
+    # until you know the sector trades at 9.
+    # A median needs a middle. With one reporting company the "median" is just
+    # that company's own number wearing a peer-group label, which is worse than
+    # showing nothing: it invites a comparison against itself.
+    comparable = [m for m in present if ordered[m].notna().sum() >= 2]
+    if comparable:
+        st.markdown(f"##### {name} — peer median "
+                    f"({len(ordered)} companies)")
+        columns = st.columns(min(len(comparable), 6))
+        for index, m in enumerate(comparable):
+            reporting = int(ordered[m].notna().sum())
+            columns[index % len(columns)].metric(
+                nq.FEATURE_BY_NAME[m].label,
+                nq.format_feature(m, ordered[m].median(skipna=True)),
+                help=f"Median of the {reporting} companies in {name} that "
+                     f"report it.")
+
+    if len(ordered) >= 2:
+        with st.expander("Percentile against peers"):
+            percentile = pd.DataFrame({"Ticker": ordered["symbol"].to_numpy()})
+            for m in present:
+                percentile[nq.FEATURE_BY_NAME[m].label] = (
+                    nq.peer_percentile(ordered[m], m).round(0).to_numpy())
+            st.dataframe(percentile, width="stretch", hide_index=True)
+            note("100 is the best reading in the group and 0 the worst. For a "
+                 "multiple that means cheapest or least indebted; for a "
+                 "percentage, most profitable. A better ratio is not the same "
+                 "thing as a better investment.")
+
+    note(f"<strong>Source.</strong> {source}. Comparing within a sector is the "
+         f"point: a bank's balance sheet and a miner's are not alike, and a "
+         f"ratio that looks extreme across the whole market is often ordinary "
+         f"beside its own peers. This view is descriptive and has no machine "
+         f"learning model in it.")
+    st.caption(nq.DISCLAIMER)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1149,6 +1297,8 @@ def main() -> None:
 
     if controls["mode"] == 'Single Stock Analysis':
         render_single_stock(companies, models, controls)
+    elif controls["mode"] == 'Sector Ranking (Compare Ratios by Peer)':
+        render_sector_ranking(controls)
     else:
         render_best_10(companies, models, controls)
     footer()
