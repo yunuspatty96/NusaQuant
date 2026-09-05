@@ -431,7 +431,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
         st.divider()
         mode = st.radio("Analysis", ['Single Stock Analysis',
                                      'Machine Learning Top Picks (Ranked)',
-                                     'Sector Ranking (Compare Ratios by Peer)'],
+                                     'Sector Ranking (Compare Ratios)'],
                         label_visibility="collapsed")
         window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
 
