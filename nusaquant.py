@@ -530,24 +530,20 @@ class FeatureSpec:
     # tree that splits on the level is splitting on company size. Only
     # scale-free ratios are modelled.
     modelled: bool = True
-    # Set when a metric can never be computed from the data this project holds,
-    # as opposed to merely being absent for one company this quarter.
-    unavailable: str = ""
 
     @property
     def title(self) -> str:
         return f"{self.label} ({self.expansion})" if self.expansion else self.label
 
 
-# The metric set, in the order the dashboard presents it. Seven categories,
-# and not every row is a model input — see FeatureSpec.modelled.
+# The metric set, in the order the dashboard presents it. Six categories, and
+# not every row is a model input — see FeatureSpec.modelled.
 #
-# Three groups are declared and permanently empty. NPL, LDR and NIM need gross
-# loans, deposits and net interest income; the three dividend metrics need a
-# dividend history. The quarterly financials endpoint carries none of them, and
-# fetching them would cost credits this project does not spend. They are listed
-# rather than silently omitted because "why is there no NPL?" is a question a
-# reader of a bank's page will ask, and the table should answer it.
+# NPL, LDR, NIM and the dividend metrics are deliberately absent. They need
+# gross loans, deposits, net interest income and a dividend history, none of
+# which the quarterly financials endpoint returns, so every company would show
+# an empty row forever. The limitation is recorded in the README instead of
+# occupying six lines of a table nobody can read a number from.
 FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
     # — 1. Valuation -------------------------------------------------
     FeatureSpec("pe", "P/E", "Valuation",
@@ -588,31 +584,12 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "currency", "Cash Flow per Share", modelled=False),
 
     # — 3. Solvency --------------------------------------------------
-    FeatureSpec("npl", "NPL", "Solvency",
-                "Share of loans not being repaid. Applies to banks only.",
-                "percent", "Non Performing Loan", modelled=False,
-                unavailable="Needs gross loans and non-performing loans, which "
-                            "the quarterly financials endpoint does not return. "
-                            "Applies to banks only in any case."),
-    FeatureSpec("ldr", "LDR", "Solvency",
-                "Loans extended against deposits taken. Applies to banks only.",
-                "percent", "Loan to Deposit", modelled=False,
-                unavailable="Needs gross loans and total deposits, which the "
-                            "quarterly financials endpoint does not return. "
-                            "Applies to banks only in any case."),
     FeatureSpec("der", "DER", "Solvency",
                 "Total liabilities relative to shareholder equity. The API does "
                 "not separate interest-bearing debt, so this is the broader "
                 "measure.", "multiple", "Debt to Equity"),
 
     # — 4. Profitability ---------------------------------------------
-    FeatureSpec("nim", "NIM", "Profitability",
-                "Interest earned less interest paid, against earning assets. "
-                "Applies to banks only.", "percent", "Net Interest Margin",
-                modelled=False,
-                unavailable="Needs net interest income and earning assets, "
-                            "which the quarterly financials endpoint does not "
-                            "return. Applies to banks only in any case."),
     FeatureSpec("roa", "ROA", "Profitability",
                 "Return generated from total assets.", "percent",
                 "Return on Asset"),
@@ -629,27 +606,6 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "Profit generated per unit of revenue.", "percent",
                 "Net Profit Margin"),
 
-    # — 5. Dividend --------------------------------------------------
-    FeatureSpec("dividend", "Dividend", "Dividend",
-                "Cash paid per share over the trailing year.", "currency", "",
-                modelled=False,
-                unavailable="The quarterly financials endpoint carries no "
-                            "dividend history, and fetching one would cost "
-                            "credits this project does not spend."),
-    FeatureSpec("dpr", "DPR", "Dividend",
-                "Share of earnings paid out rather than retained.", "percent",
-                "Dividend Payout Ratio", modelled=False,
-                unavailable="Needs a dividend history, which the quarterly "
-                            "financials endpoint does not carry."),
-    FeatureSpec("dividend_yield", "Dividend Yield", "Dividend",
-                "Trailing dividend against the current price.", "percent", "",
-                modelled=False,
-                unavailable="Needs a dividend history, which the quarterly "
-                            "financials endpoint does not carry."),
-
-    # — 6. Income Statement ------------------------------------------
-    FeatureSpec("revenue", "Revenue", "Income Statement",
-                "Trailing 12-month revenue.", "currency", "", modelled=False),
     FeatureSpec("gross_profit", "Gross Profit", "Income Statement",
                 "Trailing 12-month revenue less the direct cost of producing it.",
                 "currency", "", modelled=False),
@@ -662,7 +618,7 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "Trailing 12-month profit after everything.", "currency", "",
                 modelled=False),
 
-    # — 7. Balance Sheet ---------------------------------------------
+    # — 6. Balance Sheet ---------------------------------------------
     FeatureSpec("cash", "Cash", "Balance Sheet",
                 "Cash and equivalents at the reporting date.", "currency", "",
                 modelled=False),
@@ -1226,6 +1182,34 @@ def relative_strength_index(close: pd.Series, window: int = 14) -> float:
     return float(100 - 100 / (1 + last_gain / last_loss))
 
 
+def macd(close: pd.Series, fast: int = 12, slow: int = 26,
+         signal: int = 9) -> dict[str, float]:
+    """MACD on the last bar: line, signal, and the gap between them.
+
+    Two exponential averages of different lengths; the line is their
+    difference and the signal is a further average of that line. The histogram
+    — line less signal — is what actually turns, so it is the number the
+    dashboard reads for direction.
+    """
+    empty = {"macd": np.nan, "macd_signal": np.nan, "macd_histogram": np.nan}
+    values = pd.Series(close, dtype=float).dropna()
+    if len(values) < slow + signal:
+        return empty
+    line = (values.ewm(span=fast, adjust=False).mean()
+            - values.ewm(span=slow, adjust=False).mean())
+    smoothed = line.ewm(span=signal, adjust=False).mean()
+    return {"macd": float(line.iloc[-1]),
+            "macd_signal": float(smoothed.iloc[-1]),
+            "macd_histogram": float(line.iloc[-1] - smoothed.iloc[-1])}
+
+
+def macd_band(histogram: Any) -> str:
+    number = _to_float(histogram)
+    if not np.isfinite(number):
+        return "Unavailable"
+    return "Bullish" if number > 0 else "Bearish" if number < 0 else "Flat"
+
+
 def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
     """Descriptive trend indicators from the price series alone.
 
@@ -1280,6 +1264,7 @@ def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
         "available": True,
         "last": last, "ma50": ma50, "ma200": ma200,
         "rsi14": relative_strength_index(close),
+        **macd(close),
         "from_52w_high": (last / peak - 1.0) if peak > 0 else np.nan,
         "return_6m": change(HORIZON_TRADING_DAYS["6m"]),
         "return_12m": change(HORIZON_TRADING_DAYS["12m"]),
@@ -1564,10 +1549,7 @@ FEATURE_ABSENCE_REASON: dict[str, str] = {
 
 
 def feature_absence_reason(name: str) -> str:
-    """Why this cell is empty. Structural absence wins over a per-period one."""
-    spec = FEATURE_BY_NAME.get(name)
-    if spec is not None and spec.unavailable:
-        return spec.unavailable
+    """Why this cell is empty."""
     return FEATURE_ABSENCE_REASON.get(name, "Not reported for this period.")
 
 

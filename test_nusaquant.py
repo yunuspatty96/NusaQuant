@@ -61,16 +61,18 @@ _M = [None]
 nq.api_request = fake
 
 # ── 1. Ten features, no more ─────────────────────────────────────────────
-check("metric schema covers seven categories", len(nq.CATEGORY_ORDER) == 7,
+check("metric schema covers six categories", len(nq.CATEGORY_ORDER) == 6,
       ", ".join(nq.CATEGORY_ORDER))
 check("only scale-free ratios are modelled",
       all(nq.FEATURE_BY_NAME[f].unit in ("multiple", "percent", "ratio")
           for f in nq.FEATURE_NAMES), str(nq.FEATURE_NAMES))
 check("rupiah amounts are shown but never modelled",
       not any(f.modelled for f in nq.FEATURE_SCHEMA if f.unit == "currency"))
-check("permanently unavailable metrics carry a reason",
-      all(f.unavailable for f in nq.FEATURE_SCHEMA
-          if f.name in ("npl", "ldr", "nim", "dividend", "dpr", "dividend_yield")))
+# Metrics the endpoint cannot supply are not listed at all: an always-empty row
+# is worse than an absent one, and the README carries the reason instead.
+check("uncomputable metrics are not listed",
+      not any(f.name in ("npl", "ldr", "nim", "dividend", "dpr", "dividend_yield")
+              for f in nq.FEATURE_SCHEMA))
 check("no ensemble leftovers", not hasattr(nq, "calculate_model_agreement"))
 
 # ── 2. API key never required in code ────────────────────────────────────
@@ -238,9 +240,9 @@ if feat:
     check("acronyms are expanded", all(x in feat[0] for x in
           ("Return on Equity", "Return on Asset", "Price to Earnings",
            "Price to Book Value", "Price to Sales", "Price to Cash Flow",
-           "Non Performing Loan", "Loan to Deposit", "Net Interest Margin")))
-    check("unavailable metrics say why rather than only showing a dash",
-          "does not return" in feat[0] and "no dividend history" in feat[0])
+           "Enterprise Value to EBITDA", "Debt to Equity")))
+    check("an absent metric still says why",
+          "Not available." in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
 at.radio[1].set_value("Best 10").run()

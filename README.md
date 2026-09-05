@@ -61,31 +61,43 @@ never written to disk, never logged, and is sent only in a request header.
 
 ---
 
-## The ten features
+## The metrics
 
-All ten are reconstructible point-in-time from the v2 API.
+Twenty-three metrics in six categories, all reconstructible point-in-time from
+the v2 API and all computed from the cached snapshot at zero credits. Only the
+scale-free ratios are model inputs; the rest are shown because a reader wants
+them.
 
-| Feature | Category | Notes |
+| Category | Metrics | In model |
 |---|---|---|
-| PE | Valuation | Market cap ÷ TTM earnings; NaN when earnings ≤ 0 |
-| PB | Valuation | Market cap ÷ book equity |
-| PS | Valuation | Market cap ÷ TTM revenue |
-| ROE | Profitability | TTM earnings ÷ 4-quarter average equity |
-| ROA | Profitability | TTM earnings ÷ 4-quarter average assets |
-| Net Profit Margin | Profitability | |
-| Debt-to-Equity | Leverage | (assets − equity) ÷ equity, i.e. **total liabilities** to equity — the API does not expose interest-bearing debt separately |
-| Earnings Growth 1Y | Growth | TTM vs TTM, four quarters apart |
-| Revenue Growth 1Y | Growth | As above |
-| Accruals | Earnings quality | (earnings − operating cash flow) ÷ assets |
+| Valuation | P/E, P/S, PBV, P/CF, EV/EBITDA | yes |
+| Per Share | EPS, RPS, CPS, BVPS, CFPS | no — rupiah amounts |
+| Solvency | DER | yes |
+| Profitability | ROA, ROE, GPM, OPM, NPM | yes |
+| Income Statement | Revenue, Gross Profit, EBITDA, Net Income | no — rupiah amounts |
+| Balance Sheet | Cash, Total Assets, Total Liabilities, Total Equity | no — rupiah amounts |
 
-A ratio that is economically meaningless becomes `NaN`, never zero: a PE built
-on negative earnings is a category error, not a cheap stock. A negative ROE
-*is* meaningful and is kept.
+**Rupiah amounts are never model inputs.** A bank with IDR 1,600T of assets and
+a small cap with IDR 2T are not on one scale, and a tree that splits on the
+level is splitting on company size rather than on value. Eleven scale-free
+ratios are eligible; the missingness gate then keeps whichever clear it, which
+on the current snapshot is six — P/E, P/CF, EV/EBITDA, GPM and OPM go, because
+financial issuers file neither a cost of revenue nor interest-bearing debt
+separately. `train.py` prints which survived and why.
 
-The growth pair needs eight quarters of warm-up, so at `--quarters 16` they are
-mostly missing and the missingness gate drops them, leaving eight features.
-`--quarters 24` keeps all ten at the cost of a narrower universe. `train.py`
-prints which features survived and why.
+**Per-share figures need a share count**, which no field in the payload
+carries. It is market cap divided by close, which is exact on the day it is
+taken.
+
+**A ratio that is economically meaningless becomes `NaN`, never zero:** a P/E
+built on negative earnings is a category error, not a cheap stock. A negative
+ROE *is* meaningful and is kept.
+
+**Four groups are absent on purpose.** NPL and LDR need gross loans and
+deposits, NIM needs net interest income and earning assets, and the dividend
+ratios need a dividend history. The quarterly financials endpoint returns none
+of them, so every company would show an empty row forever. They are documented
+here rather than listed in the dashboard.
 
 ---
 

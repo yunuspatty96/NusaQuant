@@ -42,6 +42,9 @@ MODELS_DIR = Path("models")
 CACHE_TTL = 6 * 60 * 60
 
 ACCENT, POSITIVE, NEGATIVE, MUTED, GRID = "#1D4E6F", "#1B7F4B", "#B3341F", "#5C6672", "#E4E7EB"
+#: Cost sits beside revenue in the income chart, so it needs a colour that
+#: reads as the opposite of revenue without shouting like the loss red.
+COST = "#E8A0A0"
 PRICE_WINDOWS = {"1Y": 1, "3Y": 3, "5Y": 5}
 
 #: Live-mode cost for one company: 8 quarters (the minimum for TTM plus
@@ -251,6 +254,10 @@ def configure_page() -> None:
       .nq-sec {{ font-size:1.05rem; font-weight:600; margin:1.4rem 0 .5rem;
                  padding-bottom:.3rem; border-bottom:1px solid {GRID}; }}
       .nq-note {{ color:{MUTED}; font-size:.84rem; line-height:1.55; }}
+      .nq-foot {{ margin:2.5rem 0 .5rem; padding-top:1rem;
+                  border-top:1px solid {GRID}; color:{MUTED}; font-size:.8rem;
+                  line-height:1.6; }}
+      .nq-foot strong {{ color:{MUTED}; font-weight:600; }}
       .nq-name {{ font-size:1.3rem; font-weight:650; letter-spacing:-.01em;
                   line-height:1.3; margin:.2rem 0 .1rem; overflow-wrap:anywhere; }}
       .nq-name span {{ color:{MUTED}; font-weight:450; }}
@@ -264,9 +271,12 @@ def configure_page() -> None:
          read rather than sorted are plain HTML for exactly that reason. */
       .nq-table {{ width:100%; border-collapse:collapse; font-size:.86rem;
                    table-layout:fixed; margin:.2rem 0 .4rem; }}
-      .nq-table th {{ text-align:left; font-weight:600; color:{MUTED};
-                      border-bottom:1px solid {GRID}; padding:.45rem .6rem;
-                      font-size:.8rem; }}
+      .nq-table thead th {{ text-align:left; font-weight:600; color:#FFFFFF;
+                            background:{ACCENT}; padding:.5rem .6rem;
+                            font-size:.78rem; letter-spacing:.03em;
+                            text-transform:uppercase; border-bottom:none; }}
+      .nq-table thead th:first-child {{ border-top-left-radius:4px; }}
+      .nq-table thead th:last-child {{ border-top-right-radius:4px; }}
       .nq-table td {{ padding:.45rem .6rem; border-bottom:1px solid {GRID};
                       vertical-align:top; line-height:1.45; }}
       .nq-table tr:last-child td {{ border-bottom:none; }}
@@ -279,6 +289,14 @@ def configure_page() -> None:
                              text-transform:uppercase; color:{MUTED};
                              padding:.4rem .6rem; }}
     </style>""", unsafe_allow_html=True)
+
+
+def footer() -> None:
+    st.markdown(
+        "<div class='nq-foot'>"
+        "<strong>NusaQuant &copy; 2026 Patty Kyoudai</strong><br>"
+        "Developed by Patty Kyoudai &middot; Yunus Patty &middot; Lukas Patty"
+        "</div>", unsafe_allow_html=True)
 
 
 def section(title: str) -> None:
@@ -542,7 +560,7 @@ def render_technical(technical: dict, window: str) -> None:
         st.info("Not enough price history in this window to describe a trend.")
         return
 
-    columns = st.columns(5)
+    columns = st.columns(6)
     columns[0].metric("Trend", technical["trend"],
                       help="Price against its own 50- and 200-day averages. "
                            "Above both is an uptrend and below both a "
@@ -552,13 +570,28 @@ def render_technical(technical: dict, window: str) -> None:
     columns[1].metric("RSI (14)",
                       f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
                       nq.rsi_band(rsi) if np.isfinite(rsi) else None,
+                      # delta_color="off": these bands are states, not changes.
+                      # Streamlit paints a text delta green with an up arrow,
+                      # which put a rising green "Bearish" next to a negative
+                      # MACD -- the exact opposite of what the number says.
+                      delta_color="off",
                       help="Relative Strength Index over 14 days. Above 70 is "
                            "conventionally read as overbought and below 30 as "
                            "oversold; between them is neutral.")
-    columns[2].metric("From 52-week high",
+    histogram = nq._to_float(technical.get("macd_histogram"))
+    columns[2].metric("MACD (12,26,9)",
+                      f"{histogram:+,.1f}" if np.isfinite(histogram)
+                      else "Insufficient history",
+                      nq.macd_band(histogram) if np.isfinite(histogram) else None,
+                      delta_color="off",
+                      help="Moving Average Convergence Divergence. The figure is "
+                           "the histogram: the MACD line less its signal line. "
+                           "Above zero the shorter average is pulling ahead of "
+                           "the longer one, below zero it is falling behind.")
+    columns[3].metric("From 52-week high",
                       nq.format_percent(technical.get("from_52w_high"), 0))
-    columns[3].metric("6-month return", nq.format_percent(technical.get("return_6m"), 0))
-    columns[4].metric("12-month return", nq.format_percent(technical.get("return_12m"), 0))
+    columns[4].metric("6-month return", nq.format_percent(technical.get("return_6m"), 0))
+    columns[5].metric("12-month return", nq.format_percent(technical.get("return_12m"), 0))
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):
@@ -589,7 +622,7 @@ def render_income_chart(company: dict) -> None:
     if frame["cost"].notna().any():
         figure.add_trace(go.Bar(
             x=frame["report_date"], y=frame["cost"], name=cost_label,
-            marker={"color": MUTED},
+            marker={"color": COST},
             hovertemplate="Rp %{y:,.0f}<extra>" + cost_label + "</extra>"))
     figure.add_trace(go.Scatter(
         x=frame["report_date"], y=frame["net_income"], name="Net income",
@@ -635,11 +668,7 @@ def render_features(company: dict, model_features: list[str]) -> None:
             # the per-share figures: they are shown because a reader wants them,
             # but a level cannot be a cross-sectional input — a bank with IDR
             # 1,600T of assets and a small cap with IDR 2T are not on one scale.
-            if spec.unavailable:
-                # Neither modelled nor available: saying "Reference" would
-                # imply the number is there to look at, and it is not.
-                in_model = "—"
-            elif not spec.modelled:
+            if not spec.modelled:
                 in_model = "Reference"
             elif spec.name in used:
                 in_model = "Yes"
@@ -682,9 +711,11 @@ def render_features(company: dict, model_features: list[str]) -> None:
          f"way around the gap. <em>Reference</em> is everything measured in "
          f"rupiah: shown because a reader wants it, never modelled, because a "
          f"level would let the model split on company size rather than on value."
-         f"<br><br>A dash is a metric that does not apply or was not filed — "
-         f"NPL and LDR outside a bank, a dividend history the endpoint does not "
-         f"carry — and the Meaning column says which.")
+         f"<br><br>A dash is a metric this company did not file for the period, "
+         f"or one that would be economically meaningless — a P/E on a loss "
+         f"is a category error, not a cheap stock — and the Meaning column "
+         f"says which. NPL, LDR, NIM and the dividend ratios are not listed at "
+         f"all: the quarterly endpoint returns none of the fields they need.")
 
 
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
@@ -737,46 +768,12 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
                    "out-of-sample data. Treat the probability as weak evidence, "
                    "not a signal.")
 
-    with st.expander("How was this validated?"):
-        st.write(nq.explain_reliability(reliability.get("label", "Unknown"), horizon))
-        st.write(nq.EXPLANATIONS["probability"])
-        baseline = (artifact or {}).get("baseline_roc_auc")
-        if baseline:
-            st.write(f"**Versus a baseline.** A model that always predicts the "
-                     f"class prior scored {baseline:.3f} on the same folds. "
-                     f"ML is only worth using if it clearly beats that.")
-        weight = nq._to_float((artifact or {}).get("shrinkage_weight"))
-        if np.isfinite(weight):
-            unshrunk = (artifact or {}).get("validation_metrics_unshrunk", {})
-            st.write(
-                f"**Shrinkage {weight:.2f}.** The served probability is "
-                f"`{weight:.2f} x model + {1 - weight:.2f} x base rate`, with the "
-                f"weight fitted leave-one-fold-out on out-of-sample log loss. "
-                f"Blending is monotone, so the ranking is untouched; only the "
-                f"spread of the numbers changes. Before shrinkage the same "
-                f"model scored ROC-AUC "
-                f"{nq._to_float(unshrunk.get('roc_auc')):.3f}.")
-        leaderboard = (artifact or {}).get("leaderboard", [])
-        if leaderboard:
-            st.write("**Candidates considered** (ranked on out-of-sample log loss):")
-            st.dataframe(pd.DataFrame(leaderboard).round(4),
-                         width="stretch", hide_index=True)
-        rows = [{k: v for k, v in metrics.items() if k in
-                 ("roc_auc", "pr_auc", "brier", "log_loss", "balanced_accuracy",
-                  "precision", "recall", "base_rate", "roc_auc_std", "n")}]
-        st.dataframe(pd.DataFrame(rows).round(4), width="stretch", hide_index=True)
-        folds = (artifact or {}).get("fold_metrics", [])
-        if folds:
-            st.write("**Per validation fold** (purged walk-forward, one fold per "
-                     "quarterly rebalance):")
-            frame = pd.DataFrame(folds)
-            keep = [c for c in ("validation_year", "n_train", "n_validation",
-                                "roc_auc", "brier", "base_rate") if c in frame.columns]
-            st.dataframe(frame[keep].round(4), width="stretch", hide_index=True)
-        importance = (artifact or {}).get("feature_importance", [])
-        if importance:
-            st.write("**Feature importance** (a diagnostic — importance is not causality):")
-            st.dataframe(pd.DataFrame(importance).round(4), width="stretch", hide_index=True)
+    # The validation expander used to sit here: leaderboard, per-fold metrics,
+    # feature importances. It was removed because it read as a wall of numbers
+    # to anyone who had not just trained the model. Nothing is hidden — the
+    # figures above still name the reliability, the out-of-sample AUC and the
+    # fold count, and the full record lives in the artifact and in train.py's
+    # output for anyone auditing the repository.
 
 
 def render_risk(prices: pd.DataFrame, window: str) -> None:
@@ -1028,6 +1025,7 @@ def main() -> None:
         if not controls["api_key"]:
             st.info(nq.WELCOME)
             st.caption(nq.DISCLAIMER)
+            footer()
             return
         try:
             companies = live_universe(
@@ -1042,6 +1040,7 @@ def main() -> None:
         render_single_stock(companies, models, controls)
     else:
         render_best_10(companies, models, controls)
+    footer()
 
 
 if __name__ == "__main__":
