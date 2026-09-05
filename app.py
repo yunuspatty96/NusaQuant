@@ -47,6 +47,18 @@ ACCENT, POSITIVE, NEGATIVE, MUTED, GRID = "#1D4E6F", "#1B7F4B", "#B3341F", "#5C6
 COST = "#E8A0A0"
 PRICE_WINDOWS = {"1Y": 1, "3Y": 3, "5Y": 5}
 
+#: Plotly options shared by every chart. The mode bar is left at its default,
+#: which reveals it on hover rather than parking it permanently over the plot,
+#: and the buttons that do not apply to a time series are dropped. Drag to box
+#: zoom, scroll to zoom, double-click to reset.
+CHART_CONFIG = {
+    "displaylogo": False,
+    "scrollZoom": True,
+    "doubleClick": "reset",
+    "modeBarButtonsToRemove": ["select2d", "lasso2d", "toggleSpikelines",
+                               "hoverClosestCartesian", "hoverCompareCartesian"],
+}
+
 #: Live-mode cost for one company: 8 quarters (the minimum for TTM plus
 #: one-year growth) plus one report section.
 QUARTERS_FOR_INFERENCE = 8
@@ -433,7 +445,6 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
                                      'Machine Learning Top Picks (Ranked)',
                                      'Sector Ranking (Compare Ratios)'],
                         label_visibility="collapsed")
-        window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
 
         st.divider()
         if metadata:
@@ -444,7 +455,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption("No trained models loaded.")
 
     return {"offline": offline, "api_key": api_key, "snapshot": snapshot,
-            "mode": mode, "window": window}
+            "mode": mode}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -487,11 +498,18 @@ def render_profile(company: dict, predictions: dict, technical: dict) -> None:
                f"Generated {dt.datetime.now():%Y-%m-%d %H:%M}")
 
 
-def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.DataFrame:
-    section(f"Price history — {window}")
+def render_chart(company: dict, api_key: str,
+                 offline: bool) -> tuple[pd.DataFrame, str]:
+    section("Price history")
+    # The window and the style sit with the chart they change rather than in
+    # the sidebar: a control three sections away from its effect is one the
+    # reader has to go looking for.
+    left, right = st.columns([1, 1])
+    window = left.radio("Window", list(PRICE_WINDOWS), horizontal=True,
+                        key="price_window")
+    style = right.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
+                        key="chart_style")
     years = PRICE_WINDOWS[window]
-    style = st.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
-                     label_visibility="collapsed", key="chart_style")
 
     if offline:
         prices = company["prices"]
@@ -504,11 +522,11 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
         try:
             prices = live_prices(company["ticker"], start.isoformat(), end.isoformat(), api_key)
         except nq.SectorsAPIError as error:
-            show_error(error); return pd.DataFrame()
+            show_error(error); return pd.DataFrame(), window
 
     if prices.empty:
         st.info("No price history available for this window.")
-        return prices
+        return prices, window
 
     history = prices.sort_values("date").reset_index(drop=True)
     close = history["close"].astype(float)
@@ -551,14 +569,16 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
     # Moving averages are drawn only where they are fully formed. A 200-day
     # average seeded from 30 days of data is not a 200-day average.
     averages = nq.moving_averages(history)
-    for window, colour, dash in ((50, ACCENT, "solid"), (200, MUTED, "dot")):
-        column = f"ma{window}"
+    # `period`, not `window`: this loop used to shadow the selected price
+    # window, leaving it set to 200 by the time the function returned.
+    for period, colour, dash in ((50, ACCENT, "solid"), (200, MUTED, "dot")):
+        column = f"ma{period}"
         if column in averages and averages[column].notna().any():
             figure.add_trace(go.Scatter(
                 x=averages["date"], y=averages[column], mode="lines",
-                name=f"MA{window}",
+                name=f"MA{period}",
                 line={"color": colour, "width": 1.1, "dash": dash},
-                hovertemplate="Rp %{y:,.0f}<extra>MA" + str(window) + "</extra>"),
+                hovertemplate="Rp %{y:,.0f}<extra>MA" + str(period) + "</extra>"),
                 row=1, col=1)
 
     if has_volume:
@@ -596,15 +616,16 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
     figure.update_xaxes(rangeslider_visible=False, showspikes=True,
                         spikemode="across", spikethickness=1,
                         spikecolor=GRID, spikedash="dot")
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
     change = (last / first - 1.0) if first > 0 else np.nan
     note(f"Over this window the close moved from "
          f"{nq.format_rupiah(first, compact=False)} to "
          f"{nq.format_rupiah(last, compact=False)}, a change of "
          f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
-         f"there is enough history to form them.")
-    return prices
+         f"there is enough history to form them. Drag across the chart to "
+         f"zoom in, scroll to zoom, double-click to reset.")
+    return prices, window
 
 
 def render_technical(technical: dict, window: str) -> None:
@@ -685,7 +706,7 @@ def render_income_chart(company: dict) -> None:
                 "xanchor": "left", "x": 0, "font": {"size": 11}},
         xaxis={"showgrid": False, "linecolor": GRID},
         yaxis={"gridcolor": GRID, "title": "IDR per quarter", "zerolinecolor": GRID})
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
     detail = ("Cost of revenue" if cost_label == "Cost of revenue"
               else "Operating expense")
@@ -748,7 +769,7 @@ def render_momentum_charts(prices: pd.DataFrame) -> None:
         xaxis={"showgrid": False, "linecolor": GRID},
         xaxis2={"showgrid": False, "linecolor": GRID})
     figure.update_annotations(font_size=12, x=0, xanchor="left")
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
 
 def tile(column, label: str, value: str, band: str | None = None,
@@ -945,7 +966,7 @@ def render_risk(prices: pd.DataFrame, window: str) -> None:
                              plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
                              xaxis={"showgrid": False, "linecolor": GRID},
                              yaxis={"gridcolor": GRID, "tickformat": ".0%"})
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
 
 def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -> None:
@@ -990,13 +1011,13 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
                    f"NusaQuant wants at least {nq.MIN_QUARTERS_FOR_PREDICTION} "
                    f"before treating a fundamental prediction as meaningful.")
 
-    prices = render_chart(company, controls["api_key"], controls["window"], controls["offline"])
+    prices, window = render_chart(company, controls["api_key"], controls["offline"])
     # In live mode the profile has no cached series, so the trend is described
     # from whatever the chart just fetched rather than not at all.
     if not technical.get("available"):
         technical = nq.technical_state(prices)
     render_momentum_charts(prices)
-    render_technical(technical, controls["window"])
+    render_technical(technical, window)
     render_income_chart(company)
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
@@ -1007,7 +1028,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
         render_prediction(predictions["6m"], models.get("6m"), "6m")
         render_prediction(predictions["12m"], models.get("12m"), "12m")
 
-    render_risk(prices, controls["window"])
+    render_risk(prices, window)
     st.caption(nq.DISCLAIMER)
 
 
