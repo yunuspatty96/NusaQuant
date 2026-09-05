@@ -4,8 +4,8 @@
     {
       "name": "nusaquant",
       "runtimeExecutable": ".venv/Scripts/streamlit.exe",
-      "runtimeArgs": ["run", "app.py", "--server.port", "8501", "--server.headless", "true"],
-      "port": 8501
+      "runtimeArgs": ["run", "app.py", "--server.port", "8502", "--server.headless", "true"],
+      "port": 8502
     }
   ]
 }

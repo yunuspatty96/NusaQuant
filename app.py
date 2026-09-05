@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -255,6 +256,21 @@ def configure_page() -> None:
                   color:{MUTED}; margin-right:.35rem; }}
       div[data-testid="stDataFrame"] {{ font-variant-numeric:tabular-nums;
                                         font-size:.86rem; }}
+      /* st.dataframe draws onto a canvas, so its cells clip long text and no
+         stylesheet can reach inside to wrap them. Reference tables that are
+         read rather than sorted are plain HTML for exactly that reason. */
+      .nq-table {{ width:100%; border-collapse:collapse; font-size:.86rem;
+                   table-layout:fixed; margin:.2rem 0 .4rem; }}
+      .nq-table th {{ text-align:left; font-weight:600; color:{MUTED};
+                      border-bottom:1px solid {GRID}; padding:.45rem .6rem;
+                      font-size:.8rem; }}
+      .nq-table td {{ padding:.45rem .6rem; border-bottom:1px solid {GRID};
+                      vertical-align:top; line-height:1.45; }}
+      .nq-table tr:last-child td {{ border-bottom:none; }}
+      .nq-table .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
+      .nq-table .na {{ color:{MUTED}; }}
+      .nq-table .sub {{ display:block; color:{MUTED}; font-size:.78rem;
+                        font-weight:400; }}
     </style>""", unsafe_allow_html=True)
 
 
@@ -528,7 +544,10 @@ def render_technical(technical: dict, window: str) -> None:
     rsi = nq._to_float(technical.get("rsi14"))
     columns[1].metric("RSI (14)",
                       f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
-                      nq.rsi_band(rsi) if np.isfinite(rsi) else None)
+                      nq.rsi_band(rsi) if np.isfinite(rsi) else None,
+                      help="Relative Strength Index over 14 days. Above 70 is "
+                           "conventionally read as overbought and below 30 as "
+                           "oversold; between them is neutral.")
     columns[2].metric("From 52-week high",
                       nq.format_percent(technical.get("from_52w_high"), 0))
     columns[3].metric("6-month return", nq.format_percent(technical.get("return_6m"), 0))
@@ -549,30 +568,39 @@ def render_features(company: dict, model_features: list[str]) -> None:
     section("Fundamental features used by the model")
     row = company["features"].iloc[0]
     used = set(model_features or [])
-    records = []
+    body = []
     for spec in nq.FEATURE_SCHEMA:
         value = row.get(spec.name)
         present = np.isfinite(nq._to_float(value))
-        records.append({
-            "Feature": spec.label,
-            "Value": nq.format_feature(spec.name, value),
-            "Category": spec.category,
-            # The parameter was accepted and then ignored, so the table never
-            # said which of the ten the shipped model actually reads. Three are
-            # dropped at training time for missingness, and a reader comparing
-            # this table against the model had no way to tell which.
-            "In model": ("Yes" if spec.name in used
-                         else "No (dropped)" if used else "Unknown"),
-            "Meaning": (spec.meaning if present
-                        else f"Not available. {nq.feature_absence_reason(spec.name)}"),
-        })
-    st.dataframe(pd.DataFrame(records), width="stretch", hide_index=True,
-                 column_config={
-                     "Feature": st.column_config.TextColumn(width="small"),
-                     "Value": st.column_config.TextColumn(width="small"),
-                     "Category": st.column_config.TextColumn(width="small"),
-                     "In model": st.column_config.TextColumn(width="small"),
-                     "Meaning": st.column_config.TextColumn(width="large")})
+        # The parameter was accepted and then ignored, so the table never said
+        # which of the ten the shipped model actually reads. Three are dropped
+        # at training time for missingness, and a reader comparing this table
+        # against the model had no way to tell which.
+        in_model = ("Yes" if spec.name in used
+                    else "No (dropped)" if used else "Unknown")
+        meaning = (spec.meaning if present
+                   else f"Not available. {nq.feature_absence_reason(spec.name)}")
+        expansion = (f"<span class='sub'>{escape(spec.expansion)}</span>"
+                     if spec.expansion else "")
+        muted = "" if present else " na"
+        body.append(
+            "<tr>"
+            f"<td><strong>{escape(spec.label)}</strong>{expansion}</td>"
+            f"<td class='num{muted}'>{escape(nq.format_feature(spec.name, value))}</td>"
+            f"<td>{escape(spec.category)}</td>"
+            f"<td>{escape(in_model)}</td>"
+            f"<td class='{muted.strip()}'>{escape(meaning)}</td>"
+            "</tr>")
+
+    st.markdown(
+        "<table class='nq-table'>"
+        "<colgroup><col style='width:21%'><col style='width:11%'>"
+        "<col style='width:14%'><col style='width:12%'><col style='width:42%'>"
+        "</colgroup>"
+        "<thead><tr><th>Feature</th><th>Value</th><th>Category</th>"
+        "<th>In model</th><th>Meaning</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table>",
+        unsafe_allow_html=True)
     note("Values are as reported for the latest available financial period. A "
          "high or low reading is not automatically good or bad — the model "
          "weighs these together rather than applying a rule to any single one. "

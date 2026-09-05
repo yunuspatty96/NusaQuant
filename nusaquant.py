@@ -520,27 +520,43 @@ class FeatureSpec:
     category: str
     meaning: str
     unit: str = "ratio"          # "percent" | "multiple" | "ratio"
+    # What the acronym stands for. Empty where the label is already words.
+    # "ROE" is only obvious to someone who already knows what it is, and this
+    # dashboard is aimed at people deciding whether they trust the number.
+    expansion: str = ""
+
+    @property
+    def title(self) -> str:
+        return f"{self.label} ({self.expansion})" if self.expansion else self.label
 
 
 FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
     FeatureSpec("pe", "PE", "Valuation",
-                "Price relative to trailing 12-month earnings.", "multiple"),
+                "Price relative to trailing 12-month earnings.", "multiple",
+                "Price to Earnings"),
     FeatureSpec("pb", "PB", "Valuation",
-                "Price relative to book value of equity.", "multiple"),
+                "Price relative to book value of equity.", "multiple",
+                "Price to Book"),
     FeatureSpec("ps", "PS", "Valuation",
-                "Price relative to trailing 12-month sales.", "multiple"),
+                "Price relative to trailing 12-month sales.", "multiple",
+                "Price to Sales"),
     FeatureSpec("roe", "ROE", "Profitability",
-                "Return generated on shareholder equity.", "percent"),
+                "Return generated on shareholder equity.", "percent",
+                "Return on Equity"),
     FeatureSpec("roa", "ROA", "Profitability",
-                "Return generated from total assets.", "percent"),
+                "Return generated from total assets.", "percent",
+                "Return on Assets"),
     FeatureSpec("net_profit_margin", "Net Profit Margin", "Profitability",
                 "Profit generated per unit of revenue.", "percent"),
     FeatureSpec("debt_to_equity", "Debt-to-Equity", "Leverage",
-                "Total liabilities relative to shareholder equity.", "multiple"),
+                "Total liabilities relative to shareholder equity.", "multiple",
+                "DER"),
     FeatureSpec("earnings_growth_1y", "Earnings Growth 1Y", "Growth",
-                "Trailing 12-month earnings versus a year earlier.", "percent"),
+                "Trailing 12-month earnings versus a year earlier.", "percent",
+                "one-year change in TTM earnings"),
     FeatureSpec("revenue_growth_1y", "Revenue Growth 1Y", "Growth",
-                "Trailing 12-month revenue versus a year earlier.", "percent"),
+                "Trailing 12-month revenue versus a year earlier.", "percent",
+                "one-year change in TTM revenue"),
     FeatureSpec("accruals", "Accruals", "Earnings Quality",
                 "Gap between reported profit and cash actually collected, "
                 "relative to assets.", "percent"),

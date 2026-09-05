@@ -213,8 +213,19 @@ check("6M probability shown", labels.get("6M probability", "—") != "—", str(
 check("12M probability shown", labels.get("12M probability", "—") != "—")
 check("reliability shown", "Model reliability" in labels)
 check("risk shown", "Annualised volatility" in labels)
-feat = [d.value for d in at.dataframe if "Feature" in list(d.value.columns)]
-check("feature table has 10 rows", feat and len(feat[0]) == 10, str(len(feat[0])) if feat else "none")
+# The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
+# onto a canvas whose cells clip long text, and this table is read rather than
+# sorted, so the wrapping matters more than the interactivity.
+feat = [str(m.value) for m in at.markdown if "class='nq-table'" in str(m.value)]
+check("feature table rendered", len(feat) == 1, f"{len(feat)} tables")
+if feat:
+    check("feature table has 10 rows", feat[0].count("<tr>") == 11,   # +1 header
+          f"{feat[0].count('<tr>') - 1} rows")
+    check("no clipped placeholder dashes in the feature table",
+          "—</td>" not in feat[0])
+    check("acronyms are expanded", all(x in feat[0] for x in
+          ("Return on Equity", "Return on Assets", "Price to Earnings",
+           "Price to Book", "Price to Sales")))
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
 at.radio[1].set_value("Best 10").run()
