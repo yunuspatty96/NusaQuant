@@ -23,7 +23,9 @@ from a template in nusaquant.py.
 
 from __future__ import annotations
 
+import colorsys
 import datetime as dt
+import math
 import json
 from html import escape
 from pathlib import Path
@@ -46,6 +48,35 @@ ACCENT, POSITIVE, NEGATIVE, MUTED, GRID = "#1D4E6F", "#1B7F4B", "#B3341F", "#5C6
 #: reads as the opposite of revenue without shouting like the loss red.
 COST = "#E8A0A0"
 PRICE_WINDOWS = {"1Y": 1, "3Y": 3, "5Y": 5}
+
+#: The trend gradient runs from the palette's red to its green by rotating the
+#: hue rather than blending the two hex values. A straight RGB interpolation
+#: between them passes through a muddy khaki at the midpoint — "Recovering"
+#: came out #958237 — because it cuts across the colour wheel instead of
+#: travelling around it. Rotating hue keeps every intermediate step as
+#: saturated as the endpoints.
+TREND_HUE = (8, 148)        # degrees: the palette's red and green
+TREND_SATURATION = 0.68
+TREND_LIGHTNESS = (0.42, 0.30)   # red sits a little lighter than green
+#: The chip carries white text, and yellow is the lightest hue on the path, so
+#: the middle of the gradient is darkened to keep it legible. Without this dip
+#: "Weakening" landed at 2.9:1 against white — well under the 4.5:1 WCAG AA
+#: wants for text this size. At 0.12 the worst state on the scale is 4.9:1.
+TREND_MIDTONE_DIP = 0.12
+
+
+def trend_colour(position: float) -> str:
+    """Red at 0, green at 1, through amber and olive. Grey when unknown."""
+    if position is None or not np.isfinite(position):
+        return MUTED
+    position = float(np.clip(position, 0.0, 1.0))
+    hue = TREND_HUE[0] + (TREND_HUE[1] - TREND_HUE[0]) * position
+    light = (TREND_LIGHTNESS[0]
+             + (TREND_LIGHTNESS[1] - TREND_LIGHTNESS[0]) * position
+             - TREND_MIDTONE_DIP * math.sin(math.pi * position))
+    red, green, blue = colorsys.hls_to_rgb(hue / 360.0, light, TREND_SATURATION)
+    return "#%02X%02X%02X" % (round(red * 255), round(green * 255), round(blue * 255))
+
 
 #: The three views, named once. These strings are the sidebar labels, the
 #: headings on the pages they open, and the values main() dispatches on, so a
@@ -314,6 +345,10 @@ def configure_page() -> None:
       .nq-chip {{ display:inline-block; padding:.12rem .5rem; border-radius:10px;
                   font-size:.76rem; font-weight:600; border:1px solid {GRID};
                   color:{MUTED}; margin-right:.35rem; }}
+      .nq-trend {{ display:inline-block; padding:.2rem .7rem; border-radius:12px;
+                   font-size:.8rem; font-weight:600; color:#FFFFFF;
+                   letter-spacing:.01em; }}
+      .nq-trend-note {{ color:{MUTED}; font-size:.78rem; margin-left:.5rem; }}
       div[data-testid="stDataFrame"] {{ font-variant-numeric:tabular-nums;
                                         font-size:.86rem; }}
       /* st.dataframe draws onto a canvas, so its cells clip long text and no
@@ -470,15 +505,15 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 # SINGLE STOCK
 # ══════════════════════════════════════════════════════════════════════
 
-def render_profile(company: dict, predictions: dict, technical: dict) -> None:
+def render_profile(company: dict, predictions: dict) -> None:
     ticker, name = company["ticker"], company["name"]
     heading = ticker if name == ticker else f"{ticker} <span>— {name}</span>"
     st.markdown(f"<div class='nq-name'>{heading}</div>", unsafe_allow_html=True)
 
     overview = company["overview"]
-    chips = [c for c in (overview.get("sector"), overview.get("sub_sector"),
-                         technical.get("trend") if technical.get("available") else None)
-             if c]
+    # The trend moved to the price chart, which is what it describes; the
+    # classification stays here, which is what the company is.
+    chips = [c for c in (overview.get("sector"), overview.get("sub_sector")) if c]
     if chips:
         st.markdown("".join(f"<span class='nq-chip'>{c}</span>" for c in chips),
                     unsafe_allow_html=True)
@@ -507,7 +542,7 @@ def render_profile(company: dict, predictions: dict, technical: dict) -> None:
 
 
 def render_chart(company: dict, api_key: str,
-                 offline: bool) -> tuple[pd.DataFrame, str]:
+                 offline: bool) -> tuple[pd.DataFrame, str, dict]:
     section("Price history")
     # The window and the style sit with the chart they change rather than in
     # the sidebar: a control three sections away from its effect is one the
@@ -517,6 +552,9 @@ def render_chart(company: dict, api_key: str,
                         key="price_window")
     style = right.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
                         key="chart_style")
+    # Reserved above the chart and filled once the prices are in hand: in live
+    # mode the series does not exist until the fetch below has run.
+    trend_slot = st.empty()
     years = PRICE_WINDOWS[window]
 
     if offline:
@@ -530,11 +568,23 @@ def render_chart(company: dict, api_key: str,
         try:
             prices = live_prices(company["ticker"], start.isoformat(), end.isoformat(), api_key)
         except nq.SectorsAPIError as error:
-            show_error(error); return pd.DataFrame(), window
+            show_error(error); return pd.DataFrame(), window, {}
+
+    # Indicators read the full cached series where there is one, so a 1Y window
+    # does not blank the 12-month return; live mode has only what it fetched.
+    source = company["prices"] if not company["prices"].empty else prices
+    technical = nq.technical_state(source)
+    if technical.get("available"):
+        trend = technical["trend"]
+        colour = trend_colour(nq.trend_position(trend))
+        trend_slot.markdown(
+            f"<span class='nq-trend' style='background:{colour}'>{escape(trend)}</span>"
+            f"<span class='nq-trend-note'>price against its own 50- and "
+            f"200-day averages</span>", unsafe_allow_html=True)
 
     if prices.empty:
         st.info("No price history available for this window.")
-        return prices, window
+        return prices, window, technical
 
     history = prices.sort_values("date").reset_index(drop=True)
     close = history["close"].astype(float)
@@ -633,7 +683,7 @@ def render_chart(company: dict, api_key: str,
          f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
          f"there is enough history to form them. Drag across the chart to "
          f"zoom in, scroll to zoom, double-click to reset.")
-    return prices, window
+    return prices, window, technical
 
 
 def render_technical(technical: dict, window: str) -> None:
@@ -1011,19 +1061,15 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 
     predictions = {h: predict(company["features"], models.get(h), h)
                    for h in nq.HORIZON_TRADING_DAYS}
-    technical = nq.technical_state(company["prices"])
-    render_profile(company, predictions, technical)
+    render_profile(company, predictions)
 
     if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
         st.warning(f"Only {company['n_quarters']} quarterly reports available. "
                    f"NusaQuant wants at least {nq.MIN_QUARTERS_FOR_PREDICTION} "
                    f"before treating a fundamental prediction as meaningful.")
 
-    prices, window = render_chart(company, controls["api_key"], controls["offline"])
-    # In live mode the profile has no cached series, so the trend is described
-    # from whatever the chart just fetched rather than not at all.
-    if not technical.get("available"):
-        technical = nq.technical_state(prices)
+    prices, window, technical = render_chart(
+        company, controls["api_key"], controls["offline"])
     render_momentum_charts(prices)
     render_technical(technical, window)
     render_income_chart(company)

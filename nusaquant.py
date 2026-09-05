@@ -1558,6 +1558,26 @@ BAND_DIRECTION: dict[str, int] = {
 }
 
 
+#: Where each trend state sits on a red-to-green scale, 0 worst and 1 best.
+#: Recovering and Weakening are the two halves of what used to be one
+#: "sideways" bucket, and they are not equivalent: one is a price that has
+#: climbed back above its short average while still under its long one, the
+#: other is the same picture running the other way.
+TREND_SCALE: dict[str, float] = {
+    "Downtrend": 0.0,
+    "Below average": 0.25,
+    "Weakening": 0.35,
+    "Recovering": 0.65,
+    "Above average": 0.75,
+    "Uptrend": 1.0,
+}
+
+
+def trend_position(band: str) -> float:
+    """0 for the weakest state, 1 for the strongest, NaN when unknown."""
+    return TREND_SCALE.get(band, np.nan)
+
+
 def band_direction(band: str) -> int:
     """+1 up and green, -1 down and red, 0 neutral and grey."""
     return BAND_DIRECTION.get(band, 0)
