@@ -1,6 +1,6 @@
 """
-NusaQuant — IDX Market Intelligence
-===================================
+NusaQuant — IDX Machine Learning Market Intelligence
+====================================================
 
     streamlit run app.py
 
@@ -248,7 +248,7 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════
 
 def configure_page() -> None:
-    st.set_page_config(page_title="NusaQuant — IDX Machine Learning Intelligence",
+    st.set_page_config(page_title="NusaQuant — IDX Machine Learning Market Intelligence",
                        page_icon="◧", layout="wide")
     # Tabular figures: this dashboard is mostly numbers, and a column of
     # prices that does not align is harder to scan.
@@ -430,7 +430,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 
         st.divider()
         mode = st.radio("Analysis", ['Single Stock Analysis',
-                                     'Machine Learning Top Picks (Ranked 1-10)',
+                                     'Machine Learning Top Picks (Ranked)',
                                      'Sector Ranking (Compare Ratios by Peer)'],
                         label_visibility="collapsed")
         window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
@@ -1016,7 +1016,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 # ══════════════════════════════════════════════════════════════════════
 
 def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> None:
-    section('Machine Learning Top Picks (Ranked 1-10)')
+    section('Machine Learning Top Picks (Ranked)')
     if not models:
         render_missing_models(); return
 
@@ -1301,7 +1301,7 @@ def render_sector_ranking(controls: dict) -> None:
 def main() -> None:
     configure_page()
     st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nq-sub">IDX Machine Learning Intelligence · XGBoost probability '
+    st.markdown('<div class="nq-sub">IDX Machine Learning Market Intelligence · XGBoost probability '
                 'estimates for positive 6-month and 12-month returns.</div>',
                 unsafe_allow_html=True)
 

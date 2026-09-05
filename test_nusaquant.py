@@ -260,7 +260,7 @@ if feat:
           "Not available." in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
-radio(at, "Analysis").set_value("Machine Learning Top Picks (Ranked 1-10)").run()
+radio(at, "Analysis").set_value("Machine Learning Top Picks (Ranked)").run()
 btn = [b for b in at.button if "top picks" in (b.label or "").lower()]
 if btn:
     btn[0].click().run()

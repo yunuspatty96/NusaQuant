@@ -127,7 +127,7 @@ Two views, chosen in the sidebar.
 **Single Stock Analysis** — one company end to end: profile, price history,
 momentum, trend, income statement and every metric.
 
-**Machine Learning Top Picks (Ranked 1-10)** — the universe scored and ranked
+**Machine Learning Top Picks (Ranked)** — the universe scored and ranked
 by the machine learning model's probability, with risk and trend measured
 separately from price history alone.
 
