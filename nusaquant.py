@@ -635,8 +635,18 @@ def company_dividends(ticker: str, base: str = "data") -> dict[str, float]:
     if match.empty:
         return {}
     row = match.iloc[0]
-    return {m: _to_float(row[m]) for m in DIVIDEND_FIELDS.values()
-            if m in match.columns and np.isfinite(_to_float(row.get(m)))}
+    values = {m: _to_float(row[m]) for m in DIVIDEND_FIELDS.values()
+              if m in match.columns and np.isfinite(_to_float(row.get(m)))}
+
+    # yield_ttm comes back as exactly 0 when the screener has no dividend for a
+    # company, not when the company pays nothing. Across the 200-name screen
+    # every one of the 29 zero yields had a missing dividend_ttm beside it and
+    # none had a real one, and the list is BBNI, BBTN, CPIN, GEMS, HRUM — all
+    # routine payers. Printing 0.0% for them would state something untrue about
+    # a real company, so a zero without a dividend is read as unknown.
+    if values.get("dividend_yield") == 0 and "dividend" not in values:
+        values.pop("dividend_yield")
+    return values
 
 
 def screen_as_of(base: str = "data") -> str:

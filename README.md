@@ -18,6 +18,7 @@ Data: [Sectors Financial API v2](https://docs.sectors.app/). Model: XGBoost.
 | | Credits |
 |---|---:|
 | Training (one time, ~13 companies) | ~495 |
+| Universe screen (`--screen`): sector, sub-sector, industry, dividends | 1 |
 | Re-training (`--offline`), deployment, demo | **0** |
 | Live analysis of a company outside the snapshot | ~9 |
 
@@ -53,6 +54,7 @@ export SECTORS_API_KEY=your-key-here
 
 python train.py --dry-run      # see the plan and cost, spend nothing
 python train.py                # ~495 credits, once
+python train.py --screen       # sector + trailing dividends, 1 credit
 python train.py --offline      # re-train from data/cache/ — no key, no network
 streamlit run app.py           # 0 credits
 ```
@@ -64,10 +66,10 @@ never written to disk, never logged, and is sent only in a request header.
 
 ## The metrics
 
-Twenty-four metrics in six categories, all reconstructible point-in-time from
-the v2 API and all computed from the cached snapshot at zero credits. Only the
-scale-free ratios are machine learning model inputs; the rest are shown
-because a reader wants them.
+Twenty-seven metrics in seven categories. Twenty-four are reconstructed
+point-in-time from the cached snapshot at zero credits; the three dividend
+figures are a screener snapshot. Only the scale-free point-in-time ratios are
+machine learning model inputs; the rest are shown because a reader wants them.
 
 | Category | Metrics | In model |
 |---|---|---|
@@ -75,6 +77,7 @@ because a reader wants them.
 | Per Share | EPS, RPS, CPS, BVPS, CFPS | no — rupiah amounts |
 | Solvency | DER | yes |
 | Profitability | ROA, ROE, GPM, OPM, NPM | yes |
+| Dividend | Dividend, DPR, Dividend Yield | no — screener snapshot |
 | Income Statement | Revenue, Gross Profit, EBITDA, Net Income | no — rupiah amounts |
 | Balance Sheet | Cash, Total Assets, Total Liabilities, Total Equity | no — rupiah amounts |
 
@@ -94,11 +97,26 @@ taken.
 built on negative earnings is a category error, not a cheap stock. A negative
 ROE *is* meaningful and is kept.
 
-**Four groups are absent on purpose.** NPL and LDR need gross loans and
-deposits, NIM needs net interest income and earning assets, and the dividend
-ratios need a dividend history. The quarterly financials endpoint returns none
-of them, so every company would show an empty row forever. They are documented
-here rather than listed in the dashboard.
+**A screener snapshot is never a model input.** `python train.py --screen`
+costs one credit and brings back IDX classification and trailing dividends for
+the whole universe. Those dividend figures are true as of the screen date and
+only then, so they are shown and never modelled: feeding today's yield to a
+2022 observation is look-ahead of exactly the kind the leakage audit exists to
+catch. They are written into the features frame by `app.py`, never by
+`compute_features`, because `compute_features` is the path the training set
+travels — and two tests assert that separation rather than trusting it.
+
+**`yield_ttm` of exactly zero means "no data", not "pays nothing".** Across the
+200-name screen, all 29 zero yields had a missing `dividend_ttm` beside them
+and none had a real one, and the list is BBNI, BBTN, CPIN, GEMS, HRUM — all
+routine payers. Printing 0.0% for them would state something untrue about a
+real company, so a zero without a dividend is read as unknown and shown as a
+dash.
+
+**Three ratios are absent on purpose.** NPL and LDR need gross loans and
+deposits, and NIM needs net interest income and earning assets. The quarterly
+financials endpoint returns none of them, so every company would show an empty
+row forever. They are documented here rather than listed in the dashboard.
 
 ---
 
@@ -112,6 +130,21 @@ momentum, trend, income statement and every metric.
 **Machine Learning Top Picks (Ranked 1-10)** — the universe scored and ranked
 by the machine learning model's probability, with risk and trend measured
 separately from price history alone.
+
+**Sector Ranking (Compare Ratios by Peer)** — pick a sector or sub-sector, rank
+its companies on any ratio, and read each against the peer median. Multiples
+sort cheapest first and percentages sort most profitable first, derived from the
+metric's unit rather than listed by hand. Cached mode uses NusaQuant's own
+point-in-time ratios at zero credits; live mode screens the whole group from
+Sectors for one credit, and the view names which source is on screen rather than
+blending the two.
+
+Comparing inside a sector is the point. This panel holds banks next to miners,
+and that mismatch is why gross margin and EV/EBITDA fail the missingness gate
+outright. A group is not ranked on a ratio most of its members do not report,
+and a peer median is withheld unless at least two companies report one — with a
+single reporter the "median" is that company's own number wearing a peer-group
+label.
 
 The single-stock page runs in this order:
 

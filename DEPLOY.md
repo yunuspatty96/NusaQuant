@@ -14,6 +14,7 @@ Ikuti berurutan untuk proses deployment.
 | 2. Set API key | 0 |
 | 3. Cek rencana (`--dry-run`) | 0 |
 | 4. **Training** | **~495** |
+| 4b. Screen sektor + dividen (`--screen`) | 1 |
 | 5. Tes lokal | 0 |
 | 6. Push ke GitHub | 0 |
 | 7. Deploy Streamlit | 0 |
@@ -90,6 +91,17 @@ Kalau angkanya tidak cocok dan anda memiliki budget lebih, sesuaikan:
 python train.py --budget 3000 --quarters 24 --companies 50
 ```
 
+**Klasifikasi sektor dan dividen — 1 kredit.** Satu panggilan screener mengambil
+sector, sub-sector, industry dan dividen trailing untuk seluruh universe (200
+perusahaan sekaligus):
+
+```bash
+python train.py --screen
+```
+
+Jalankan ulang kapan pun angka dividennya perlu disegarkan; klasifikasinya tidak
+basi. Tanpa ini, chip sektor dan mode **Sector Ranking** tidak akan muncul.
+
 **Melatih ulang tanpa kredit dan tanpa API key.** Setelah `data/cache/` terisi,
 model bisa dilatih ulang sepenuhnya dari cache — tidak ada permintaan yang
 keluar dari mesin Anda:
@@ -111,7 +123,7 @@ streamlit run app.py
 
 Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pastikan **6M probability** dan **12M probability** menampilkan angka persen, bukan `—`.
 
-Dua tampilan tersedia di sidebar: **Single Stock Analysis** dan **Machine Learning Top Picks (Ranked 1-10)**.
+Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Top Picks (Ranked 1-10)**, dan **Sector Ranking (Compare Ratios by Peer)**.
 
 Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 6M, 58% untuk 12M). Itu memang disengaja — lihat bagian terakhir dokumen ini.
@@ -215,9 +227,10 @@ learning model berdasarkan log loss out-of-sample, penyusutan probabilitas ke
 base rate yang di-fit leave-one-fold-out, dan skor reliability yang menolak
 memberi nilai pada model yang tidak bisa memeringkat.
 
-Fitur: 24 metrik dalam 6 kategori dihitung dari cache tanpa kredit; hanya 11
-rasio bebas-skala yang boleh menjadi input model, dan gate missingness
-menyisakan 6 di antaranya. NPL, LDR, NIM dan rasio dividen tidak ada karena
-endpoint quarterly tidak mengembalikan field yang dibutuhkan.
+Fitur: 27 metrik dalam 7 kategori. 24 dihitung point-in-time dari cache tanpa
+kredit; 3 metrik dividen berasal dari screener dan **tidak pernah masuk model**
+karena bukan data point-in-time. Hanya 11 rasio bebas-skala yang boleh menjadi
+input model, dan gate missingness menyisakan 6 di antaranya. NPL, LDR dan NIM
+tidak ada karena endpoint quarterly tidak mengembalikan field yang dibutuhkan.
 
 Ketika melakukan training kembali, cache yang lama tetap dipakai — Anda hanya membayar API credit untuk saham yang baru.

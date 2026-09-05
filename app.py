@@ -1143,7 +1143,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
 # ══════════════════════════════════════════════════════════════════════
 
 RANKABLE = ["pe", "ps", "pbv", "pcf", "ev_ebitda", "der", "roa", "roe",
-            "gpm", "opm", "npm"]
+            "gpm", "opm", "npm", "dividend_yield", "dpr"]
 
 
 def cached_sector_table(tickers: list[str]) -> pd.DataFrame:
@@ -1158,9 +1158,12 @@ def cached_sector_table(tickers: list[str]) -> pd.DataFrame:
         metrics = nq.features_frame(quarterly,
                                     nq._to_float(latest.get("market_cap")),
                                     nq._to_float(latest.get("close"))).iloc[0]
+        # The dividend figures are a screener snapshot rather than something
+        # compute_features can reconstruct, so they are merged in here.
         rows.append({"symbol": ticker, "company_name": nq.company_name(ticker),
                      "market_cap": nq._to_float(latest.get("market_cap")),
-                     **{m: nq._to_float(metrics.get(m)) for m in RANKABLE}})
+                     **{m: nq._to_float(metrics.get(m)) for m in RANKABLE},
+                     **nq.company_dividends(ticker)})
     return pd.DataFrame(rows)
 
 
@@ -1273,6 +1276,15 @@ def render_sector_ranking(controls: dict) -> None:
                  "multiple that means cheapest or least indebted; for a "
                  "percentage, most profitable. A better ratio is not the same "
                  "thing as a better investment.")
+
+    if any(m in present for m in ("dividend_yield", "dpr")):
+        as_of = nq.screen_as_of()
+        note(f"Dividend yield and payout are trailing figures from the Sectors "
+             f"screener{f', taken on {as_of}' if as_of else ''}, not "
+             f"point-in-time history. A company with no reading either pays "
+             f"nothing or was not covered by the screen — the two are not "
+             f"distinguished, so an absent yield is shown as a dash rather "
+             f"than as zero.")
 
     note(f"<strong>Source.</strong> {source}. Comparing within a sector is the "
          f"point: a bank's balance sheet and a miner's are not alike, and a "
