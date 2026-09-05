@@ -1076,16 +1076,24 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
         st.error("No companies available."); return
 
     labels = {f"{r.symbol} — {r.company_name}": r.symbol for r in companies.itertuples()}
-    keys = list(labels)
+    # Alphabetical here, deliberately against the market-cap order the frame
+    # arrives in. The size filters need largest-first because they take the top
+    # N; this list is read by someone hunting for one name they already have in
+    # mind, and for that the alphabet beats any ranking.
+    keys = sorted(labels)
     chosen = st.session_state.get("ticker")
     index = next((i for i, k in enumerate(keys) if labels[k] == chosen), 0)
 
     left, right = st.columns([3, 1])
-    selection = left.selectbox("Select stock", keys, index=index)
+    selection = left.selectbox(
+        "Select stock", keys, index=index,
+        help="Type to filter by ticker or company name.")
     if right.button("Analyze", width="stretch", type="primary"):
         st.session_state["ticker"] = labels[selection]
         st.session_state["analysed"] = labels[selection]
     ticker = labels[selection]
+    st.caption(f"{len(keys)} companies, listed A–Z. Click the box and type to "
+               f"search by ticker or by name.")
 
     if st.session_state.get("analysed") != ticker:
         st.info("Select a stock and press **Analyze**.")
@@ -1157,15 +1165,22 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     # unreachable: the slider stopped at 15 and quietly excluded four of them
     # from every ranking, with nothing on screen to say so.
     largest = max(5, len(companies))
-    size = st.slider("Universe size", 5, largest, min(len(companies), largest),
-                     step=1, help=UNIVERSE_SIZE_HELP.format(total=len(companies)))
-    st.caption(UNIVERSE_SIZE_NOTE)
-    if controls["offline"]:
-        st.caption("Cached mode — this ranking costs 0 API credits.")
-    else:
-        st.caption(f"Estimated cost: about {size * CREDITS_PER_COMPANY:,} API credits.")
+    # A bordered container rather than st.form, which is what Sector Ranking
+    # uses: a form holds its widget values back until submit, and the live-mode
+    # cost estimate below has to move with the slider. The border is the same.
+    with st.container(border=True):
+        size = st.slider("Universe size", 5, largest, min(len(companies), largest),
+                         step=1,
+                         help=UNIVERSE_SIZE_HELP.format(total=len(companies)))
+        st.caption(UNIVERSE_SIZE_NOTE)
+        if controls["offline"]:
+            st.caption("Cached mode — this ranking costs 0 API credits.")
+        else:
+            st.caption(f"Estimated cost: about "
+                       f"{size * CREDITS_PER_COMPANY:,} API credits.")
+        go = st.button("Show top picks", type="primary")
 
-    if not st.button("Show top picks", type="primary"):
+    if not go:
         st.info("Press the button to rank the universe."); return
 
     universe = companies.head(size)
