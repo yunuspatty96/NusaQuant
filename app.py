@@ -524,7 +524,10 @@ def render_profile(company: dict, predictions: dict) -> None:
     columns[1].metric("Market cap", nq.format_rupiah(overview.get("market_cap")))
     for column, horizon in ((columns[2], "6m"), (columns[3], "12m")):
         result = predictions.get(horizon, {})
-        label = f"{'6' if horizon == '6m' else '12'}M probability"
+        # Spelled out rather than left as "6M probability": the horizon alone
+        # never said probability of what, and the answer is the one thing a
+        # reader must not guess at.
+        label = f"{'6' if horizon == '6m' else '12'}M probability of positive return"
         if result.get("available"):
             column.metric(label, f"{result['probability'] * 100:.0f}%")
         else:

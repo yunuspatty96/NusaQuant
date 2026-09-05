@@ -255,8 +255,10 @@ at.session_state["ticker"] = TICKERS[0]; at.session_state["analysed"] = TICKERS[
 at.run()
 check("single stock renders", not at.exception, str(at.exception)[:300] if at.exception else "")
 labels = {m.label: m.value for m in at.metric}
-check("6M probability shown", labels.get("6M probability", "—") != "—", str(labels.get("6M probability")))
-check("12M probability shown", labels.get("12M probability", "—") != "—")
+_p6 = "6M probability of positive return"
+_p12 = "12M probability of positive return"
+check("6M probability shown", labels.get(_p6, "—") != "—", str(labels.get(_p6)))
+check("12M probability shown", labels.get(_p12, "—") != "—")
 check("reliability shown", "Machine learning model reliability" in labels)
 check("risk shown", "Annualised volatility" in labels)
 # The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
