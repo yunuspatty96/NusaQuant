@@ -519,52 +519,171 @@ class FeatureSpec:
     label: str
     category: str
     meaning: str
-    unit: str = "ratio"          # "percent" | "multiple" | "ratio"
+    unit: str = "ratio"          # "percent" | "multiple" | "currency" | "ratio"
     # What the acronym stands for. Empty where the label is already words.
     # "ROE" is only obvious to someone who already knows what it is, and this
     # dashboard is aimed at people deciding whether they trust the number.
     expansion: str = ""
+    # Whether the model may read it. Absolute rupiah amounts are shown because
+    # a reader wants them, but they cannot be model inputs: a bank with IDR
+    # 1,300T of assets and a small cap with IDR 2T are not on one scale, and a
+    # tree that splits on the level is splitting on company size. Only
+    # scale-free ratios are modelled.
+    modelled: bool = True
+    # Set when a metric can never be computed from the data this project holds,
+    # as opposed to merely being absent for one company this quarter.
+    unavailable: str = ""
 
     @property
     def title(self) -> str:
         return f"{self.label} ({self.expansion})" if self.expansion else self.label
 
 
+# The metric set, in the order the dashboard presents it. Seven categories,
+# and not every row is a model input — see FeatureSpec.modelled.
+#
+# Three groups are declared and permanently empty. NPL, LDR and NIM need gross
+# loans, deposits and net interest income; the three dividend metrics need a
+# dividend history. The quarterly financials endpoint carries none of them, and
+# fetching them would cost credits this project does not spend. They are listed
+# rather than silently omitted because "why is there no NPL?" is a question a
+# reader of a bank's page will ask, and the table should answer it.
 FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
-    FeatureSpec("pe", "PE", "Valuation",
+    # — 1. Valuation -------------------------------------------------
+    FeatureSpec("pe", "P/E", "Valuation",
                 "Price relative to trailing 12-month earnings.", "multiple",
                 "Price to Earnings"),
-    FeatureSpec("pb", "PB", "Valuation",
-                "Price relative to book value of equity.", "multiple",
-                "Price to Book"),
-    FeatureSpec("ps", "PS", "Valuation",
-                "Price relative to trailing 12-month sales.", "multiple",
+    FeatureSpec("ps", "P/S", "Valuation",
+                "Price relative to trailing 12-month revenue.", "multiple",
                 "Price to Sales"),
+    FeatureSpec("pbv", "PBV", "Valuation",
+                "Price relative to book value of equity.", "multiple",
+                "Price to Book Value"),
+    FeatureSpec("pcf", "P/CF", "Valuation",
+                "Price relative to trailing 12-month operating cash flow. "
+                "Harder to flatter than earnings.", "multiple",
+                "Price to Cash Flow"),
+    FeatureSpec("ev_ebitda", "EV/EBITDA", "Valuation",
+                "Enterprise value — market cap plus debt, less cash — against "
+                "trailing 12-month EBITDA. Neutral to how a company is financed.",
+                "multiple", "Enterprise Value to EBITDA"),
+
+    # — 2. Per Share -------------------------------------------------
+    # Rupiah amounts, so shown but never modelled. The share count is inferred
+    # as market cap divided by close, which is exact on the day it is taken.
+    FeatureSpec("eps", "EPS", "Per Share",
+                "Trailing 12-month earnings attributable to one share.",
+                "currency", "Earning per Share", modelled=False),
+    FeatureSpec("rps", "RPS", "Per Share",
+                "Trailing 12-month revenue per share.",
+                "currency", "Revenue per Share", modelled=False),
+    FeatureSpec("cps", "CPS", "Per Share",
+                "Cash and equivalents held per share.",
+                "currency", "Cash per Share", modelled=False),
+    FeatureSpec("bvps", "BVPS", "Per Share",
+                "Book value of equity per share.",
+                "currency", "Book Value per Share", modelled=False),
+    FeatureSpec("cfps", "CFPS", "Per Share",
+                "Trailing 12-month operating cash flow per share.",
+                "currency", "Cash Flow per Share", modelled=False),
+
+    # — 3. Solvency --------------------------------------------------
+    FeatureSpec("npl", "NPL", "Solvency",
+                "Share of loans not being repaid. Applies to banks only.",
+                "percent", "Non Performing Loan", modelled=False,
+                unavailable="Needs gross loans and non-performing loans, which "
+                            "the quarterly financials endpoint does not return. "
+                            "Applies to banks only in any case."),
+    FeatureSpec("ldr", "LDR", "Solvency",
+                "Loans extended against deposits taken. Applies to banks only.",
+                "percent", "Loan to Deposit", modelled=False,
+                unavailable="Needs gross loans and total deposits, which the "
+                            "quarterly financials endpoint does not return. "
+                            "Applies to banks only in any case."),
+    FeatureSpec("der", "DER", "Solvency",
+                "Total liabilities relative to shareholder equity. The API does "
+                "not separate interest-bearing debt, so this is the broader "
+                "measure.", "multiple", "Debt to Equity"),
+
+    # — 4. Profitability ---------------------------------------------
+    FeatureSpec("nim", "NIM", "Profitability",
+                "Interest earned less interest paid, against earning assets. "
+                "Applies to banks only.", "percent", "Net Interest Margin",
+                modelled=False,
+                unavailable="Needs net interest income and earning assets, "
+                            "which the quarterly financials endpoint does not "
+                            "return. Applies to banks only in any case."),
+    FeatureSpec("roa", "ROA", "Profitability",
+                "Return generated from total assets.", "percent",
+                "Return on Asset"),
     FeatureSpec("roe", "ROE", "Profitability",
                 "Return generated on shareholder equity.", "percent",
                 "Return on Equity"),
-    FeatureSpec("roa", "ROA", "Profitability",
-                "Return generated from total assets.", "percent",
-                "Return on Assets"),
-    FeatureSpec("net_profit_margin", "Net Profit Margin", "Profitability",
-                "Profit generated per unit of revenue.", "percent"),
-    FeatureSpec("debt_to_equity", "Debt-to-Equity", "Leverage",
-                "Total liabilities relative to shareholder equity.", "multiple",
-                "DER"),
-    FeatureSpec("earnings_growth_1y", "Earnings Growth 1Y", "Growth",
-                "Trailing 12-month earnings versus a year earlier.", "percent",
-                "one-year change in TTM earnings"),
-    FeatureSpec("revenue_growth_1y", "Revenue Growth 1Y", "Growth",
-                "Trailing 12-month revenue versus a year earlier.", "percent",
-                "one-year change in TTM revenue"),
-    FeatureSpec("accruals", "Accruals", "Earnings Quality",
-                "Gap between reported profit and cash actually collected, "
-                "relative to assets.", "percent"),
+    FeatureSpec("gpm", "GPM", "Profitability",
+                "Revenue left after the direct cost of producing it.", "percent",
+                "Gross Profit Margin"),
+    FeatureSpec("opm", "OPM", "Profitability",
+                "Revenue left after operating costs, before financing and tax.",
+                "percent", "Operating Profit Margin"),
+    FeatureSpec("npm", "NPM", "Profitability",
+                "Profit generated per unit of revenue.", "percent",
+                "Net Profit Margin"),
+
+    # — 5. Dividend --------------------------------------------------
+    FeatureSpec("dividend", "Dividend", "Dividend",
+                "Cash paid per share over the trailing year.", "currency", "",
+                modelled=False,
+                unavailable="The quarterly financials endpoint carries no "
+                            "dividend history, and fetching one would cost "
+                            "credits this project does not spend."),
+    FeatureSpec("dpr", "DPR", "Dividend",
+                "Share of earnings paid out rather than retained.", "percent",
+                "Dividend Payout Ratio", modelled=False,
+                unavailable="Needs a dividend history, which the quarterly "
+                            "financials endpoint does not carry."),
+    FeatureSpec("dividend_yield", "Dividend Yield", "Dividend",
+                "Trailing dividend against the current price.", "percent", "",
+                modelled=False,
+                unavailable="Needs a dividend history, which the quarterly "
+                            "financials endpoint does not carry."),
+
+    # — 6. Income Statement ------------------------------------------
+    FeatureSpec("revenue", "Revenue", "Income Statement",
+                "Trailing 12-month revenue.", "currency", "", modelled=False),
+    FeatureSpec("gross_profit", "Gross Profit", "Income Statement",
+                "Trailing 12-month revenue less the direct cost of producing it.",
+                "currency", "", modelled=False),
+    FeatureSpec("ebitda", "EBITDA", "Income Statement",
+                "Trailing 12-month earnings before interest, tax, depreciation "
+                "and amortisation.", "currency",
+                "Earnings Before Interest, Tax, Depreciation and Amortisation",
+                modelled=False),
+    FeatureSpec("net_income", "Net Income", "Income Statement",
+                "Trailing 12-month profit after everything.", "currency", "",
+                modelled=False),
+
+    # — 7. Balance Sheet ---------------------------------------------
+    FeatureSpec("cash", "Cash", "Balance Sheet",
+                "Cash and equivalents at the reporting date.", "currency", "",
+                modelled=False),
+    FeatureSpec("total_assets", "Total Assets", "Balance Sheet",
+                "Everything the company owns at the reporting date.", "currency",
+                "", modelled=False),
+    FeatureSpec("total_liabilities", "Total Liabilities", "Balance Sheet",
+                "Everything the company owes at the reporting date.", "currency",
+                "", modelled=False),
+    FeatureSpec("total_equity", "Total Equity", "Balance Sheet",
+                "What is left for shareholders: assets less liabilities.",
+                "currency", "", modelled=False),
 )
 
-FEATURE_NAMES: list[str] = [f.name for f in FEATURE_SCHEMA]
+METRIC_NAMES: list[str] = [f.name for f in FEATURE_SCHEMA]
 FEATURE_BY_NAME = {f.name: f for f in FEATURE_SCHEMA}
-assert len(FEATURE_NAMES) == 10, "The feature set is capped at ten."
+
+# What the model is allowed to read: the scale-free ratios, and only those.
+FEATURE_NAMES: list[str] = [f.name for f in FEATURE_SCHEMA if f.modelled]
+
+CATEGORY_ORDER: list[str] = list(dict.fromkeys(f.category for f in FEATURE_SCHEMA))
 
 
 def _to_float(value: Any) -> float:
@@ -643,8 +762,13 @@ def build_panel(quarterly: pd.DataFrame, basis: str = "auto") -> pd.DataFrame:
     panel = quarterly.sort_values("report_date").reset_index(drop=True).copy()
     panel["quarterly_basis"] = resolved
 
-    flows = ("revenue", "earnings", "operating_cash_flow")
-    for column in (*flows, "total_assets", "total_equity"):
+    # Flows accumulate through the year on a cumulative filer and must be
+    # de-cumulated; levels are a photograph of one date and must not be.
+    flows = ("revenue", "earnings", "operating_cash_flow", "gross_profit",
+             "operating_pnl", "ebitda", "cost_of_revenue", "operating_expense")
+    levels = ("total_assets", "total_equity", "total_liabilities",
+              "cash_only", "total_debt")
+    for column in (*flows, *levels):
         if column in panel.columns:
             panel[column] = pd.to_numeric(panel[column], errors="coerce")
         else:
@@ -662,9 +786,15 @@ def build_panel(quarterly: pd.DataFrame, basis: str = "auto") -> pd.DataFrame:
                 np.where(panel["_q"] == 1, panel[column], np.nan))
         panel = panel.drop(columns=["_year", "_q"])
 
-    panel["revenue_ttm"] = panel["revenue"].rolling(4, min_periods=4).sum()
-    panel["earnings_ttm"] = panel["earnings"].rolling(4, min_periods=4).sum()
-    panel["ocf_ttm"] = panel["operating_cash_flow"].rolling(4, min_periods=4).sum()
+    for source, target in (("revenue", "revenue_ttm"),
+                           ("earnings", "earnings_ttm"),
+                           ("operating_cash_flow", "ocf_ttm"),
+                           ("gross_profit", "gross_profit_ttm"),
+                           ("operating_pnl", "operating_profit_ttm"),
+                           ("ebitda", "ebitda_ttm"),
+                           ("cost_of_revenue", "cost_of_revenue_ttm"),
+                           ("operating_expense", "operating_expense_ttm")):
+        panel[target] = panel[source].rolling(4, min_periods=4).sum()
     panel["avg_equity"] = panel["total_equity"].rolling(4, min_periods=2).mean()
     panel["avg_assets"] = panel["total_assets"].rolling(4, min_periods=2).mean()
     panel["available_date"] = panel["report_date"] + pd.Timedelta(days=REPORTING_LAG_DAYS)
@@ -672,63 +802,128 @@ def build_panel(quarterly: pd.DataFrame, basis: str = "auto") -> pd.DataFrame:
 
 
 def compute_features(panel: pd.DataFrame, market_cap: float | None,
-                     index: int | None = None) -> dict[str, float]:
-    """The ten-feature vector. THE single source of truth for both paths.
+                     index: int | None = None,
+                     close: float | None = None) -> dict[str, float]:
+    """Every metric in FEATURE_SCHEMA. THE single source of truth for both paths.
 
     The training script calls this at every historical observation; the app
     calls it once with the latest quarter. Because both go through here, a
-    feature cannot mean one thing in training and another in production.
+    metric cannot mean one thing in training and another in production.
+
+    Ratios that would be economically meaningless are NaN, never zero: a P/E
+    built on a loss is a category error, not a cheap stock. A negative margin
+    or return IS meaningful and is kept, so only a negative denominator voids
+    those.
     """
-    features = {name: np.nan for name in FEATURE_NAMES}
+    metrics = {name: np.nan for name in METRIC_NAMES}
     if panel is None or panel.empty:
-        return features
+        return metrics
     position = len(panel) - 1 if index is None else index
     if position < 0 or position >= len(panel):
-        return features
+        return metrics
 
     row = panel.iloc[position]
-    cap = _to_float(market_cap)
+    cap, price = _to_float(market_cap), _to_float(close)
     revenue, earnings = row.get("revenue_ttm"), row.get("earnings_ttm")
+    ocf, ebitda = row.get("ocf_ttm"), row.get("ebitda_ttm")
+    gross, operating = row.get("gross_profit_ttm"), row.get("operating_profit_ttm")
     equity, assets = row.get("total_equity"), row.get("total_assets")
+    liabilities, cash = row.get("total_liabilities"), row.get("cash_only")
+    debt = row.get("total_debt")
 
-    # Valuation, built from market cap so share counts and splits never matter.
-    # A PE on negative earnings is a category error, not a cheap stock -> NaN.
-    features["pe"] = _ratio(cap, earnings, positive_denominator=True)
-    features["pb"] = _ratio(cap, equity, positive_denominator=True)
-    features["ps"] = _ratio(cap, revenue, positive_denominator=True)
+    # — 1. Valuation. Built from market cap, so share counts and splits do
+    #       not enter the ratio at all.
+    metrics["pe"] = _ratio(cap, earnings, positive_denominator=True)
+    metrics["ps"] = _ratio(cap, revenue, positive_denominator=True)
+    metrics["pbv"] = _ratio(cap, equity, positive_denominator=True)
+    metrics["pcf"] = _ratio(cap, ocf, positive_denominator=True)
 
-    # Profitability. A negative ROE IS meaningful, so only a negative
-    # denominator voids these.
-    features["roe"] = _ratio(earnings, row.get("avg_equity"), positive_denominator=True)
-    features["roa"] = _ratio(earnings, row.get("avg_assets"), positive_denominator=True)
-    features["net_profit_margin"] = _ratio(earnings, revenue, positive_denominator=True)
+    # Enterprise value needs interest-bearing debt, which only some filings
+    # carry. Substituting total liabilities would quietly turn EV/EBITDA into a
+    # different ratio for banks than for miners, so it stays NaN instead.
+    if np.isfinite(cap) and pd.notna(debt):
+        enterprise = cap + _to_float(debt) - (_to_float(cash) if pd.notna(cash) else 0.0)
+        metrics["ev_ebitda"] = _ratio(enterprise, ebitda, positive_denominator=True)
 
-    # The quarterly endpoint gives assets and equity but not liabilities, so
-    # liabilities are inferred as (assets - equity). That makes this total
-    # liabilities to equity, broader than interest-bearing debt to equity.
-    if pd.notna(assets) and pd.notna(equity) and _to_float(equity) > 0:
-        features["debt_to_equity"] = _ratio(_to_float(assets) - _to_float(equity), equity)
+    # — 2. Per share. The share count is market cap divided by close, which is
+    #       exact on the day it is taken and needs no separate field.
+    shares = cap / price if np.isfinite(cap) and np.isfinite(price) and price > 0 else np.nan
+    if np.isfinite(shares) and shares > 0:
+        metrics["eps"] = _ratio(earnings, shares)
+        metrics["rps"] = _ratio(revenue, shares)
+        metrics["cps"] = _ratio(cash, shares)
+        metrics["bvps"] = _ratio(equity, shares)
+        metrics["cfps"] = _ratio(ocf, shares)
 
-    # Profit a company reports but has not collected in cash is the classic
-    # sign of aggressive accounting.
-    ocf = row.get("ocf_ttm")
-    if pd.notna(earnings) and pd.notna(ocf):
-        features["accruals"] = _ratio(_to_float(earnings) - _to_float(ocf),
-                                      row.get("avg_assets"), positive_denominator=True)
+    # — 3. Solvency. NPL and LDR need loan and deposit fields the endpoint
+    #       does not return; they stay NaN and the interface says why.
+    if pd.notna(liabilities) and pd.notna(equity) and _to_float(equity) > 0:
+        metrics["der"] = _ratio(liabilities, equity)
+    elif pd.notna(assets) and pd.notna(equity) and _to_float(equity) > 0:
+        # Older cached filings carry assets and equity but not liabilities.
+        metrics["der"] = _ratio(_to_float(assets) - _to_float(equity), equity)
 
-    # Growth: TTM against TTM four quarters back, so seasonality cancels.
-    if position >= 4:
-        past = panel.iloc[position - 4]
-        features["earnings_growth_1y"] = _growth(earnings, past.get("earnings_ttm"))
-        features["revenue_growth_1y"] = _growth(revenue, past.get("revenue_ttm"))
+    # — 4. Profitability.
+    metrics["roe"] = _ratio(earnings, row.get("avg_equity"), positive_denominator=True)
+    metrics["roa"] = _ratio(earnings, row.get("avg_assets"), positive_denominator=True)
+    metrics["gpm"] = _ratio(gross, revenue, positive_denominator=True)
+    metrics["opm"] = _ratio(operating, revenue, positive_denominator=True)
+    metrics["npm"] = _ratio(earnings, revenue, positive_denominator=True)
 
-    return features
+    # — 5. Dividend. Nothing to compute: see FeatureSpec.unavailable.
+
+    # — 6/7. Levels, reported as they stand. Shown, never modelled.
+    metrics["revenue"] = _to_float(revenue)
+    metrics["gross_profit"] = _to_float(gross)
+    metrics["ebitda"] = _to_float(ebitda)
+    metrics["net_income"] = _to_float(earnings)
+    metrics["cash"] = _to_float(cash)
+    metrics["total_assets"] = _to_float(assets)
+    metrics["total_liabilities"] = _to_float(liabilities)
+    metrics["total_equity"] = _to_float(equity)
+    return metrics
 
 
-def features_frame(quarterly: pd.DataFrame, market_cap: float | None) -> pd.DataFrame:
-    """One-row DataFrame with exactly the model's schema, in order."""
+def features_frame(quarterly: pd.DataFrame, market_cap: float | None,
+                   close: float | None = None) -> pd.DataFrame:
+    """One-row DataFrame carrying every metric, in schema order."""
     panel = build_panel(quarterly)
-    return pd.DataFrame([compute_features(panel, market_cap)], columns=FEATURE_NAMES)
+    return pd.DataFrame([compute_features(panel, market_cap, close=close)],
+                        columns=METRIC_NAMES)
+
+
+def income_statement_series(quarterly: pd.DataFrame) -> pd.DataFrame:
+    """Per-quarter revenue, cost and net income for the comparison chart.
+
+    De-cumulated first, so a cumulative filer's Q4 is one quarter rather than
+    the whole year. Cost is the direct cost of revenue where a company reports
+    it and operating expense where it does not — banks report the second and
+    not the first — and the caller is told which, because plotting two
+    different quantities under one label would be worse than plotting neither.
+    """
+    if quarterly is None or quarterly.empty:
+        return pd.DataFrame()
+    panel = build_panel(quarterly)
+    if panel.empty:
+        return pd.DataFrame()
+
+    for column, label in (("cost_of_revenue", "Cost of revenue"),
+                          ("operating_expense", "Operating expense")):
+        series = panel.get(column)
+        if series is not None and series.notna().sum() >= 4:
+            cost, cost_label = series.abs(), label
+            break
+    else:
+        cost, cost_label = pd.Series(np.nan, index=panel.index), "Cost"
+
+    frame = pd.DataFrame({
+        "report_date": panel["report_date"],
+        "revenue": panel.get("revenue"),
+        "cost": cost,
+        "net_income": panel.get("earnings"),
+    }).dropna(subset=["revenue"], how="all")
+    frame.attrs["cost_label"] = cost_label
+    return frame
 
 
 def data_quality(features: pd.DataFrame, model_features: Sequence[str]) -> float:
@@ -786,7 +981,8 @@ def build_observations(ticker: str, quarterly: pd.DataFrame,
             "price_index": position,
             "close": _to_float(price_row.get("close")),
             "market_cap": market_cap,
-            **compute_features(panel.iloc[: index + 1], market_cap, index),
+            **compute_features(panel.iloc[: index + 1], market_cap, index,
+                               close=_to_float(price_row.get("close"))),
         })
     return pd.DataFrame(rows)
 
@@ -837,9 +1033,13 @@ def build_dataset(frames) -> pd.DataFrame:
     dataset = dataset.drop_duplicates(subset=["ticker", "observation_date"])
     dataset = dataset.sort_values(["observation_date", "ticker"]).reset_index(drop=True)
 
-    dataset[FEATURE_NAMES] = dataset[FEATURE_NAMES].replace([np.inf, -np.inf], np.nan)
-    for column in ("pe", "pb", "ps"):
-        dataset.loc[dataset[column] <= 0, column] = np.nan   # cannot be negative
+    present = [c for c in METRIC_NAMES if c in dataset.columns]
+    dataset[present] = dataset[present].replace([np.inf, -np.inf], np.nan)
+    # A price multiple cannot be negative: the denominator was already
+    # required to be positive, so a negative here is arithmetic noise.
+    for column in ("pe", "ps", "pbv", "pcf", "ev_ebitda"):
+        if column in dataset.columns:
+            dataset.loc[dataset[column] <= 0, column] = np.nan
     return dataset
 
 
@@ -1317,34 +1517,57 @@ def format_multiple(value: Any) -> str:
 def format_feature(name: str, value: Any) -> str:
     spec = FEATURE_BY_NAME.get(name)
     if spec is None:
-        return "n/a"
+        return "—"
     if spec.unit == "percent":
         return format_percent(value)
     if spec.unit == "multiple":
         return format_multiple(value)
+    if spec.unit == "currency":
+        return format_rupiah(value, compact=True)
     number = _to_float(value)
-    return "n/a" if not np.isfinite(number) else f"{number:.2f}"
+    # An em dash, matching every other formatter. A metric that does not apply
+    # to this company — NPL outside a bank — reads as a dash, and the row's
+    # Meaning column carries the reason so the dash is never the whole answer.
+    return "—" if not np.isfinite(number) else f"{number:.2f}"
 
 
-# Why a feature is absent, per feature. Every NaN in this project is deliberate
+# Why a metric is absent, per metric. Every NaN in this project is deliberate
 # — a ratio is dropped when it would be economically meaningless rather than
-# quietly filled with zero — so a blank cell always has a real reason behind it
-# and the interface should say what it is instead of printing a dash.
+# quietly filled with zero — so a blank cell always has a real reason behind
+# it and the interface should say what it is instead of printing a dash.
 FEATURE_ABSENCE_REASON: dict[str, str] = {
-    "pe": "Trailing 12-month earnings are zero or negative, so a PE would be meaningless.",
-    "pb": "Book equity is zero or negative.",
+    "pe": "Trailing 12-month earnings are zero or negative, so a P/E would be "
+          "meaningless.",
     "ps": "Trailing 12-month revenue is zero or negative.",
-    "roe": "Average equity over the period is zero or negative.",
+    "pbv": "Book equity is zero or negative.",
+    "pcf": "Trailing 12-month operating cash flow is zero or negative.",
+    "ev_ebitda": "Needs interest-bearing debt and positive EBITDA. Many filings "
+                 "report neither, and substituting total liabilities would make "
+                 "this a different ratio for banks than for miners.",
+    "eps": "Needs trailing earnings and a share count.",
+    "rps": "Needs trailing revenue and a share count.",
+    "cps": "Cash is not reported for this period, or the share count is unknown.",
+    "bvps": "Needs book equity and a share count.",
+    "cfps": "Needs trailing operating cash flow and a share count.",
+    "der": "Liabilities are not reported for this period, or equity is zero or "
+           "negative.",
     "roa": "Average assets over the period are zero or negative.",
-    "net_profit_margin": "Trailing 12-month revenue is zero or negative.",
-    "debt_to_equity": "Assets or equity are missing for this period.",
-    "earnings_growth_1y": "Needs eight quarters of history; fewer are available.",
-    "revenue_growth_1y": "Needs eight quarters of history; fewer are available.",
-    "accruals": "Operating cash flow is not reported for this period.",
+    "roe": "Average equity over the period is zero or negative.",
+    "gpm": "Gross profit is not reported. Banks and other financial issuers do "
+           "not file a cost of revenue, so they have no gross margin.",
+    "opm": "Operating profit is not reported for this period.",
+    "npm": "Trailing 12-month revenue is zero or negative.",
+    "gross_profit": "Not reported. Financial issuers do not file a cost of "
+                    "revenue.",
+    "ebitda": "Not reported for this period.",
 }
 
 
 def feature_absence_reason(name: str) -> str:
+    """Why this cell is empty. Structural absence wins over a per-period one."""
+    spec = FEATURE_BY_NAME.get(name)
+    if spec is not None and spec.unavailable:
+        return spec.unavailable
     return FEATURE_ABSENCE_REASON.get(name, "Not reported for this period.")
 
 

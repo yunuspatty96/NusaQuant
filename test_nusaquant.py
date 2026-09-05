@@ -61,7 +61,16 @@ _M = [None]
 nq.api_request = fake
 
 # ── 1. Ten features, no more ─────────────────────────────────────────────
-check("exactly 10 features", len(nq.FEATURE_NAMES) == 10, str(nq.FEATURE_NAMES))
+check("metric schema covers seven categories", len(nq.CATEGORY_ORDER) == 7,
+      ", ".join(nq.CATEGORY_ORDER))
+check("only scale-free ratios are modelled",
+      all(nq.FEATURE_BY_NAME[f].unit in ("multiple", "percent", "ratio")
+          for f in nq.FEATURE_NAMES), str(nq.FEATURE_NAMES))
+check("rupiah amounts are shown but never modelled",
+      not any(f.modelled for f in nq.FEATURE_SCHEMA if f.unit == "currency"))
+check("permanently unavailable metrics carry a reason",
+      all(f.unavailable for f in nq.FEATURE_SCHEMA
+          if f.name in ("npl", "ldr", "nim", "dividend", "dpr", "dividend_yield")))
 check("no ensemble leftovers", not hasattr(nq, "calculate_model_agreement"))
 
 # ── 2. API key never required in code ────────────────────────────────────
@@ -219,13 +228,19 @@ check("risk shown", "Annualised volatility" in labels)
 feat = [str(m.value) for m in at.markdown if "class='nq-table'" in str(m.value)]
 check("feature table rendered", len(feat) == 1, f"{len(feat)} tables")
 if feat:
-    check("feature table has 10 rows", feat[0].count("<tr>") == 11,   # +1 header
-          f"{feat[0].count('<tr>') - 1} rows")
-    check("no clipped placeholder dashes in the feature table",
-          "—</td>" not in feat[0])
+    # Group headers are <tr class='grp'>, which does not match "<tr>",
+    # so only the plain metric rows and the one header row are counted.
+    rows = feat[0].count("<tr>") - 1
+    check("metric table lists every metric", rows == len(nq.METRIC_NAMES),
+          f"{rows} of {len(nq.METRIC_NAMES)}")
+    check("metric table is grouped by category",
+          feat[0].count("<tr class='grp'>") == len(nq.CATEGORY_ORDER))
     check("acronyms are expanded", all(x in feat[0] for x in
-          ("Return on Equity", "Return on Assets", "Price to Earnings",
-           "Price to Book", "Price to Sales")))
+          ("Return on Equity", "Return on Asset", "Price to Earnings",
+           "Price to Book Value", "Price to Sales", "Price to Cash Flow",
+           "Non Performing Loan", "Loan to Deposit", "Net Interest Margin")))
+    check("unavailable metrics say why rather than only showing a dash",
+          "does not return" in feat[0] and "no dividend history" in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
 at.radio[1].set_value("Best 10").run()

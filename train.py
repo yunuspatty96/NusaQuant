@@ -724,10 +724,11 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
         mark = "keep" if row.retained else "DROP"
         print(f"  {mark}  {row.feature:<22} {row.missing_rate * 100:>5.1f}% missing")
     dropped = [f for f in nq.FEATURE_NAMES if f not in features]
-    if any(f.endswith("_growth_1y") for f in dropped):
-        print("\n  Note: the growth features need 8 quarters of warm-up, so at the")
-        print("  default 16 quarters they are mostly missing. Re-run with")
-        print("  --quarters 24 to keep them (fewer companies, same budget).")
+    if dropped:
+        print(f"\n  Dropped for missingness: {', '.join(dropped)}.")
+        print("  Financial issuers file no cost of revenue and often no separate")
+        print("  interest-bearing debt, so gross margin and EV/EBITDA go missing")
+        print("  across a panel that holds banks next to miners.")
     if len(features) < 5:
         print("\nToo few usable features. Stopping.")
         return 1

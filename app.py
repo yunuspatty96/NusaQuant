@@ -205,6 +205,9 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
         quarterly = live_quarterly(ticker, api_key, QUARTERS_FOR_INFERENCE)
         overview = (report or {}).get("overview") or {}
         market_cap = overview.get("market_cap")
+        # The per-share metrics need a share count, and the share count is
+        # market cap over close. Both come from the overview in live mode.
+        close = overview.get("last_close_price")
         prices = pd.DataFrame()
         name = (report or {}).get("company_name") or ticker
 
@@ -214,7 +217,7 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
         "overview": overview,
         "quarterly": quarterly,
         "prices": prices,
-        "features": nq.features_frame(quarterly, market_cap),
+        "features": nq.features_frame(quarterly, market_cap, close),
         "latest_period": quarterly["report_date"].max() if not quarterly.empty else pd.NaT,
         "n_quarters": len(quarterly),
     }
@@ -271,6 +274,10 @@ def configure_page() -> None:
       .nq-table .na {{ color:{MUTED}; }}
       .nq-table .sub {{ display:block; color:{MUTED}; font-size:.78rem;
                         font-weight:400; }}
+      .nq-table tr.grp td {{ background:#F7F8FA; font-weight:600;
+                             font-size:.78rem; letter-spacing:.04em;
+                             text-transform:uppercase; color:{MUTED};
+                             padding:.4rem .6rem; }}
     </style>""", unsafe_allow_html=True)
 
 
@@ -564,51 +571,120 @@ def render_technical(technical: dict, window: str) -> None:
         note(nq.EXPLANATIONS["technical"])
 
 
+def render_income_chart(company: dict) -> None:
+    """Revenue against cost against net income, quarter by quarter."""
+    section("Revenue vs Cost vs Net Income")
+    frame = nq.income_statement_series(company["quarterly"])
+    if frame.empty or frame[["revenue", "net_income"]].notna().sum().sum() == 0:
+        st.info("The quarterly filings for this company do not carry enough "
+                "income-statement detail to chart.")
+        return
+
+    cost_label = frame.attrs.get("cost_label", "Cost")
+    figure = go.Figure()
+    figure.add_trace(go.Bar(
+        x=frame["report_date"], y=frame["revenue"], name="Revenue",
+        marker={"color": ACCENT},
+        hovertemplate="Rp %{y:,.0f}<extra>Revenue</extra>"))
+    if frame["cost"].notna().any():
+        figure.add_trace(go.Bar(
+            x=frame["report_date"], y=frame["cost"], name=cost_label,
+            marker={"color": MUTED},
+            hovertemplate="Rp %{y:,.0f}<extra>" + cost_label + "</extra>"))
+    figure.add_trace(go.Scatter(
+        x=frame["report_date"], y=frame["net_income"], name="Net income",
+        mode="lines+markers", line={"color": POSITIVE, "width": 2},
+        marker={"size": 5},
+        hovertemplate="Rp %{y:,.0f}<extra>Net income</extra>"))
+
+    figure.update_layout(
+        height=340, margin={"l": 0, "r": 0, "t": 30, "b": 0},
+        plot_bgcolor="white", paper_bgcolor="white", barmode="group", bargap=0.25,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02,
+                "xanchor": "left", "x": 0, "font": {"size": 11}},
+        xaxis={"showgrid": False, "linecolor": GRID},
+        yaxis={"gridcolor": GRID, "title": "IDR per quarter", "zerolinecolor": GRID})
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+    detail = ("Cost of revenue" if cost_label == "Cost of revenue"
+              else "Operating expense")
+    note(f"Per quarter, not cumulative: filings that report year-to-date are "
+         f"de-cumulated first, so a fourth quarter is one quarter and not the "
+         f"whole year. Cost is shown as <strong>{escape(detail.lower())}</strong> "
+         f"for this company — issuers that do not file a cost of revenue, banks "
+         f"among them, are charted on operating expense instead, and the label "
+         f"says which.")
+
+
 def render_features(company: dict, model_features: list[str]) -> None:
-    section("Fundamental features used by the model")
+    section("Fundamental metrics")
     row = company["features"].iloc[0]
     used = set(model_features or [])
+
     body = []
-    for spec in nq.FEATURE_SCHEMA:
-        value = row.get(spec.name)
-        present = np.isfinite(nq._to_float(value))
-        # The parameter was accepted and then ignored, so the table never said
-        # which of the ten the shipped model actually reads. Three are dropped
-        # at training time for missingness, and a reader comparing this table
-        # against the model had no way to tell which.
-        in_model = ("Yes" if spec.name in used
-                    else "No (dropped)" if used else "Unknown")
-        meaning = (spec.meaning if present
-                   else f"Not available. {nq.feature_absence_reason(spec.name)}")
-        expansion = (f"<span class='sub'>{escape(spec.expansion)}</span>"
-                     if spec.expansion else "")
-        muted = "" if present else " na"
-        body.append(
-            "<tr>"
-            f"<td><strong>{escape(spec.label)}</strong>{expansion}</td>"
-            f"<td class='num{muted}'>{escape(nq.format_feature(spec.name, value))}</td>"
-            f"<td>{escape(spec.category)}</td>"
-            f"<td>{escape(in_model)}</td>"
-            f"<td class='{muted.strip()}'>{escape(meaning)}</td>"
-            "</tr>")
+    for category in nq.CATEGORY_ORDER:
+        specs = [f for f in nq.FEATURE_SCHEMA if f.category == category]
+        if not specs:
+            continue
+        body.append(f"<tr class='grp'><td colspan='5'>{escape(category)}</td></tr>")
+        for spec in specs:
+            value = row.get(spec.name)
+            present = np.isfinite(nq._to_float(value))
+            # Three states, not two. "Reference" is for the rupiah amounts and
+            # the per-share figures: they are shown because a reader wants them,
+            # but a level cannot be a cross-sectional input — a bank with IDR
+            # 1,600T of assets and a small cap with IDR 2T are not on one scale.
+            if spec.unavailable:
+                # Neither modelled nor available: saying "Reference" would
+                # imply the number is there to look at, and it is not.
+                in_model = "—"
+            elif not spec.modelled:
+                in_model = "Reference"
+            elif spec.name in used:
+                in_model = "Yes"
+            else:
+                in_model = "No (dropped)" if used else "Unknown"
+            meaning = (spec.meaning if present
+                       else f"Not available. {nq.feature_absence_reason(spec.name)}")
+            expansion = (f"<span class='sub'>{escape(spec.expansion)}</span>"
+                         if spec.expansion else "")
+            muted = "" if present else " na"
+            body.append(
+                "<tr>"
+                f"<td><strong>{escape(spec.label)}</strong>{expansion}</td>"
+                f"<td class='num{muted}'>"
+                f"{escape(nq.format_feature(spec.name, value))}</td>"
+                f"<td>{escape(spec.unit.title())}</td>"
+                f"<td>{escape(in_model)}</td>"
+                f"<td class='{muted.strip()}'>{escape(meaning)}</td>"
+                "</tr>")
 
     st.markdown(
         "<table class='nq-table'>"
-        "<colgroup><col style='width:21%'><col style='width:11%'>"
-        "<col style='width:14%'><col style='width:12%'><col style='width:42%'>"
+        "<colgroup><col style='width:20%'><col style='width:13%'>"
+        "<col style='width:11%'><col style='width:13%'><col style='width:43%'>"
         "</colgroup>"
-        "<thead><tr><th>Feature</th><th>Value</th><th>Category</th>"
+        "<thead><tr><th>Metric</th><th>Value</th><th>Unit</th>"
         "<th>In model</th><th>Meaning</th></tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table>",
         unsafe_allow_html=True)
-    note("Values are as reported for the latest available financial period. A "
-         "high or low reading is not automatically good or bad — the model "
-         "weighs these together rather than applying a rule to any single one. "
-         "A feature reading <em>n/a</em> is one this project refuses to "
-         "fabricate: the row says why it is absent. <em>In model: No "
-         "(dropped)</em> means the feature was missing for more than "
-         f"{nq.MAX_FEATURE_MISSINGNESS:.0%} of the training panel, so training "
-         "dropped it rather than impute its way around the gap.")
+
+    modelled = sum(1 for f in nq.FEATURE_SCHEMA if f.modelled)
+    note(f"Values are as reported for the latest available financial period. A "
+         f"high or low reading is not automatically good or bad — the model "
+         f"weighs these together rather than applying a rule to any single one."
+         f"<br><br><strong>In model</strong> has three states. "
+         f"<em>Yes</em> and <em>No (dropped)</em> apply to the {modelled} "
+         f"scale-free ratios the model is allowed to read; dropped means the "
+         f"ratio was missing for more than {nq.MAX_FEATURE_MISSINGNESS:.0%} of "
+         f"the training panel, so training left it out rather than impute its "
+         f"way around the gap. <em>Reference</em> is everything measured in "
+         f"rupiah: shown because a reader wants it, never modelled, because a "
+         f"level would let the model split on company size rather than on value."
+         f"<br><br>A dash is a metric that does not apply or was not filed — "
+         f"NPL and LDR outside a bank, a dividend history the endpoint does not "
+         f"carry — and the Meaning column says which.")
 
 
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
@@ -788,6 +864,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     # from whatever the chart just fetched rather than not at all.
     if not technical.get("available"):
         technical = nq.technical_state(prices)
+    render_income_chart(company)
     render_technical(technical, controls["window"])
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)

@@ -2,13 +2,12 @@
   "version": "0.3.0",
   "model": "selected per horizon from xgb_depth1, xgb_depth2, logistic_l2, logistic_l2_strong",
   "feature_set": [
-    "pb",
     "ps",
-    "roe",
+    "pbv",
+    "der",
     "roa",
-    "net_profit_margin",
-    "debt_to_equity",
-    "accruals"
+    "roe",
+    "npm"
   ],
   "horizons": [
     "6m",
@@ -48,18 +47,18 @@
   "snapshot_as_of": "2026-06-30",
   "validation": {
     "6m": {
-      "model": "xgb_depth2",
-      "shrinkage_weight": 0.3,
+      "model": "xgb_depth1",
+      "shrinkage_weight": 0.45,
       "folds": 9,
-      "roc_auc": 0.513678928361468,
+      "roc_auc": 0.5162194507432603,
       "reliability": "No measurable edge",
       "has_edge": false
     },
     "12m": {
       "model": "xgb_depth1",
-      "shrinkage_weight": 0.8,
+      "shrinkage_weight": 1.0,
       "folds": 5,
-      "roc_auc": 0.5086538461538461,
+      "roc_auc": 0.5153846153846153,
       "reliability": "No measurable edge",
       "has_edge": false
     }
