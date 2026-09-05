@@ -357,7 +357,14 @@ def configure_page() -> None:
         white-space:normal; overflow-wrap:anywhere;
       }}
       [data-testid="stMetricLabel"] {{ color:{MUTED}; }}
-      [data-testid="stMetricLabel"] p {{ font-size:.8rem; line-height:1.3; }}
+      /* Streamlit lays the label out as a grid: text in one cell, the tooltip
+         icon in a 22px cell beside it, and the <p> inside set to nowrap. A
+         label as long as "12M probability of positive return" then runs past
+         its 168px cell and is cut. Letting it wrap is the whole fix. */
+      [data-testid="stMetricLabel"] p {{ font-size:.8rem; line-height:1.3;
+                                        white-space:normal;
+                                        overflow-wrap:break-word; }}
+      [data-testid="stMetricLabel"] {{ align-items:start; }}
       [data-testid="stMetric"] {{ overflow:visible; }}
       .nq-title {{ font-size:1.6rem; font-weight:650; letter-spacing:-.01em; margin-bottom:.1rem; }}
       .nq-sub {{ color:{MUTED}; font-size:.9rem; }}
@@ -1248,6 +1255,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     top = qualified.head(10)
     months = "6" if horizon == "6m" else "12"
     reliability = artifact.get("reliability", {}).get("label", "Unknown")
+    inputs = len(artifact.get("feature_names", []))
     st.markdown(f"#### Top {len(top)} — {months} month outlook")
     st.dataframe(pd.DataFrame({
         "Rank": range(1, len(top) + 1),
@@ -1281,7 +1289,17 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
          f"and it applies to every row equally. Risk and trend are measured "
          f"from price history alone, independently of the machine learning model, "
          f"because a high "
-         f"probability does not automatically mean low risk.")
+         f"probability does not automatically mean low risk."
+         f"<br><br><strong>Data quality</strong> is the share of the "
+         f"{inputs} inputs the machine learning model reads that "
+         f"are actually present for that company this period — {inputs} "
+         f"of {inputs} is 100%. It measures the company's filing, "
+         f"not the model: a company can score 100% and still sit under a model "
+         f"with no measurable edge, which is the case here. It is shown because "
+         f"a probability built on half the inputs deserves less weight than one "
+         f"built on all of them, and NusaQuant refuses to score a company at all "
+         f"below {nq.MIN_DATA_COMPLETENESS:.0%} — those appear under "
+         f"<em>Excluded by quality gates</em> rather than in the ranking.")
 
     excluded = ranked[~ranked.eligible]
     if not excluded.empty:
