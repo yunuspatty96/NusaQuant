@@ -357,7 +357,10 @@ def get_daily_history(api_key: str, ticker: str, start_date, end_date) -> pd.Dat
 
     history = pd.concat(frames, ignore_index=True)
     history["date"] = pd.to_datetime(history["date"])
-    for column in ("close", "volume", "market_cap"):
+    # Open, high and low are coerced too where the endpoint returns them: the
+    # dashboard offers a candlestick, and it can only draw one for a company
+    # whose filings actually carry the full bar.
+    for column in ("close", "volume", "market_cap", "open", "high", "low"):
         if column in history.columns:
             history[column] = pd.to_numeric(history[column], errors="coerce")
     return history.drop_duplicates("date").sort_values("date").reset_index(drop=True)
@@ -606,6 +609,8 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "Profit generated per unit of revenue.", "percent",
                 "Net Profit Margin"),
 
+    FeatureSpec("revenue", "Revenue", "Income Statement",
+                "Trailing 12-month revenue.", "currency", "", modelled=False),
     FeatureSpec("gross_profit", "Gross Profit", "Income Statement",
                 "Trailing 12-month revenue less the direct cost of producing it.",
                 "currency", "", modelled=False),
@@ -1166,6 +1171,33 @@ def moving_averages(prices: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
     return frame
 
 
+def rsi_series(close: pd.Series, window: int = 14) -> pd.Series:
+    """Wilder's RSI across the whole series, for charting."""
+    values = pd.Series(close, dtype=float)
+    delta = values.diff()
+    gain = delta.clip(lower=0).ewm(alpha=1 / window, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / window, adjust=False).mean()
+    strength = gain / loss.replace(0, np.nan)
+    result = 100 - 100 / (1 + strength)
+    # A stretch with no down days has infinite strength, which is RSI 100.
+    result[(loss == 0) & (gain > 0)] = 100.0
+    result.iloc[:window] = np.nan
+    return result
+
+
+def macd_series(close: pd.Series, fast: int = 12, slow: int = 26,
+                signal: int = 9) -> pd.DataFrame:
+    """MACD line, signal and histogram across the whole series, for charting."""
+    values = pd.Series(close, dtype=float)
+    line = (values.ewm(span=fast, adjust=False).mean()
+            - values.ewm(span=slow, adjust=False).mean())
+    smoothed = line.ewm(span=signal, adjust=False).mean()
+    frame = pd.DataFrame({"macd": line, "signal": smoothed,
+                          "histogram": line - smoothed})
+    frame.iloc[:slow + signal] = np.nan
+    return frame
+
+
 def relative_strength_index(close: pd.Series, window: int = 14) -> float:
     """Wilder's RSI on the last bar. NaN until there is enough history."""
     values = pd.Series(close, dtype=float).dropna()
@@ -1279,6 +1311,22 @@ def rsi_band(value: Any) -> str:
     if number >= 70: return "Overbought"
     if number <= 30: return "Oversold"
     return "Neutral"
+
+
+#: Which way each band points, so the dashboard can pick an arrow and a colour
+#: without re-deriving the meaning of the word at the call site. Overbought is
+#: a stretched market and reads as the downward case; oversold the reverse.
+BAND_DIRECTION: dict[str, int] = {
+    "Overbought": -1, "Bearish": -1, "Downtrend": -1, "Weakening": -1,
+    "Oversold": 1, "Bullish": 1, "Uptrend": 1, "Recovering": 1,
+    "Neutral": 0, "Flat": 0, "Unavailable": 0, "Insufficient history": 0,
+    "Above average": 0, "Below average": 0,
+}
+
+
+def band_direction(band: str) -> int:
+    """+1 up and green, -1 down and red, 0 neutral and grey."""
+    return BAND_DIRECTION.get(band, 0)
 
 
 def _band(value: Any, low: float, high: float) -> float:
@@ -1559,13 +1607,15 @@ def explain_probability(probability: float, horizon: str,
         return "A probability is not available for this company."
     months = "6" if horizon == "6m" else "12"
     percentage = probability * 100
-    base = (f"The model estimates a {percentage:.0f}% probability that this "
+    base = (f"The machine learning model estimates a {percentage:.0f}% probability "
+            f"that this "
             f"stock's return will be positive over the next {months} months, "
             f"based on the financial information available to it. "
             f"It does not mean the stock will rise by {percentage:.0f}%.")
     if has_edge:
         return base
-    return (base + " On out-of-sample validation this model did not separate "
+    return (base + " On out-of-sample validation this machine learning model did "
+                   "not separate "
                    "winners from losers, so the number reflects how often "
                    "stocks in this universe rose historically rather than "
                    "anything specific to this company.")
@@ -1588,41 +1638,50 @@ def explain_reliability(label: str, horizon: str) -> str:
     if label == "Unknown":
         return "Out-of-sample reliability has not been measured."
     if label == "No measurable edge":
-        return (f"Across purged walk-forward folds this model did not rank "
+        return (f"Across purged walk-forward folds this machine learning model "
+                f"did not rank "
                 f"{months}-month winners above losers by more than chance. Its "
                 f"probabilities are shrunk toward the historical base rate and "
                 f"should be read as that base rate, not as a stock-specific "
                 f"forecast. The constraint is the size of the panel, not the "
                 f"choice of algorithm.")
     if label == "Weak":
-        return (f"On {months}-month out-of-sample validation this model provides "
+        return (f"On {months}-month out-of-sample validation this machine learning "
+                f"model provides "
                 f"limited predictive separation. Treat its probabilities as weak "
                 f"evidence rather than a signal.")
-    return (f"On {months}-month out-of-sample validation this model showed "
+    return (f"On {months}-month out-of-sample validation this machine learning "
+            f"model showed "
             f"{label.lower()} reliability.")
 
 
 EXPLANATIONS = {
-    "probability": ("The percentage is the model's estimated probability that the "
+    "probability": ("The percentage is the machine learning model's estimated "
+                    "probability that the "
                     "return will be above 0% over the horizon. It is not a "
                     "guaranteed return and not a price target."),
-    "reliability": ("Reliability describes how the model performed on historical "
+    "reliability": ("Reliability describes how the machine learning model performed "
+                    "on historical "
                     "out-of-sample validation — higher means its past predictions "
                     "were more consistent and better calibrated."),
     "risk": ("Risk summarises historical volatility, drawdown, downside movement "
              "and liquidity. It describes what already happened and does not "
              "guarantee future risk."),
     "technical": ("These indicators describe what the price has already done. "
-                  "They are not a forecast and they are not part of the model — "
+                  "They are not a forecast and they are not part of the machine "
+                  "learning model — "
                   "momentum and volatility were tested as model features on this "
                   "panel and did not earn a place. Read them the way you read the "
                   "risk block: as context, not as a signal to act on."),
-    "data_quality": ("Data quality is the share of the model's required inputs "
-                     "available for this company. It is not model reliability."),
+    "data_quality": ("Data quality is the share of the machine learning model's "
+                     "required inputs "
+                     "available for this company. It is not machine learning model "
+                     "reliability."),
 }
 
 DISCLAIMER = ("NusaQuant provides quantitative analysis for research and decision "
-              "support. Model probabilities are estimates, not guarantees or "
+              "support. Machine learning model probabilities are estimates, not "
+              "guarantees or "
               "financial advice.")
 
 WELCOME = ("Understand the IDX market through data.\n\n"

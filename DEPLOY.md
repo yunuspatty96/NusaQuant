@@ -111,6 +111,8 @@ streamlit run app.py
 
 Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pastikan **6M probability** dan **12M probability** menampilkan angka persen, bukan `—`.
 
+Dua tampilan tersedia di sidebar: **Single Stock Analysis** dan **Machine Learning Top Picks (Ranked 1-10)**.
+
 Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 6M, 58% untuk 12M). Itu memang disengaja — lihat bagian terakhir dokumen ini.
 
@@ -167,21 +169,21 @@ Buka panel **Diagnostics** di aplikasi. Ia menyebutkan penyebabnya:
 
 | Diagnosis | Artinya | Perbaikan |
 |---|---|---|
-| `absent` | Model tidak ada | Ulangi langkah 4 dan 6 |
+| `absent` | Machine learning model tidak ada | Ulangi langkah 4 dan 6 |
 | `unreadable` | Ada, tapi gagal dibaca | Versi library beda — ulangi langkah 1 lalu 4 |
 
 ---
 
 ## Yang perlu Anda tahu sebelum demo
 
-Dengan snapshot 15 saham saat ini, **kedua horizon melaporkan "No measurable
+Dengan snapshot 25 saham saat ini, **kedua horizon melaporkan "No measurable
 edge"** — bukan sekadar "Weak".
 
 | | 6M | 12M |
 |---|---:|---:|
 | Fold walk-forward (di-purge) | 9 | 5 |
-| Baris out-of-sample | 135 | 75 |
-| ROC-AUC (rata-rata di dalam fold) | 0.470 | 0.478 |
+| Baris out-of-sample | 217 | 120 |
+| ROC-AUC (rata-rata di dalam fold) | 0.521 | 0.498 |
 | Baseline (selalu menebak prior) | 0.500 | 0.500 |
 | Mengalahkan baseline? | tidak | tidak |
 
@@ -191,15 +193,16 @@ Itu bukan bug, dan bukan pula sesuatu yang disembunyikan. Aplikasi:
 - menyusutkan probabilitas ke arah base rate historis, sehingga sebarannya
   hanya sekitar 2 poin persen (bukan 0.66 yang terdengar meyakinkan padahal
   tidak tervalidasi),
-- dan memberi peringatan di tab **Best 10** bahwa urutannya bukan bukti.
+- dan memberi peringatan di tab **Machine Learning Top Picks** bahwa
+  urutannya bukan bukti.
 
 **Kenapa, dan apa yang akan mengubahnya.** Target model adalah tanda dari
 *absolute return*, dan dalam 6–12 bulan tanda itu sebagian besar ditentukan
 arah pasar, bukan perusahaannya — base rate per kuartal di panel ini berkisar
-dari 0.00 sampai 1.00. Selain itu, 15 saham berarti setiap cross-section
-kuartalan hanya selebar 15 titik. Yang membatasi adalah **lebar universe**,
+dari 0.00 sampai 1.00. Selain itu, 25 saham berarti setiap cross-section
+kuartalan hanya selebar 25 titik. Yang membatasi adalah **lebar universe**,
 bukan algoritmanya. Kalau Anda punya kredit lebih, tambah jumlah saham lebih
-dulu — itu jauh lebih berpengaruh daripada menambah riwayat untuk 15 nama yang
+dulu — itu jauh lebih berpengaruh daripada menambah riwayat untuk nama yang
 sama:
 
 ```bash
@@ -207,9 +210,14 @@ python train.py --budget 3000 --companies 50
 ```
 
 Metodologi: validasi walk-forward yang di-purge per tanggal rebalance, audit
-kebocoran data 9 poin, penyelarasan point-in-time 90 hari, pemilihan model
-berdasarkan log loss out-of-sample, penyusutan probabilitas ke base rate yang
-di-fit leave-one-fold-out, dan skor reliability yang menolak memberi nilai pada
-model yang tidak bisa memeringkat.
+kebocoran data 9 poin, penyelarasan point-in-time 90 hari, pemilihan machine
+learning model berdasarkan log loss out-of-sample, penyusutan probabilitas ke
+base rate yang di-fit leave-one-fold-out, dan skor reliability yang menolak
+memberi nilai pada model yang tidak bisa memeringkat.
+
+Fitur: 24 metrik dalam 6 kategori dihitung dari cache tanpa kredit; hanya 11
+rasio bebas-skala yang boleh menjadi input model, dan gate missingness
+menyisakan 6 di antaranya. NPL, LDR, NIM dan rasio dividen tidak ada karena
+endpoint quarterly tidak mengembalikan field yang dibutuhkan.
 
 Ketika melakukan training kembali, cache yang lama tetap dipakai — Anda hanya membayar API credit untuk saham yang baru.

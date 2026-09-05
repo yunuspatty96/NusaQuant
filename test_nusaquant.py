@@ -212,7 +212,13 @@ at = AppTest.from_file(str(WORK/"app.py"), default_timeout=240)
 at.run()
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
-check("cached mode default", at.radio[0].value == "Cached snapshot", str(at.radio[0].value))
+# Radios are found by label, not index: adding the chart-style toggle shifted
+# every index and a positional lookup fails silently at the wrong widget.
+def radio(app, label):
+    return next(r for r in app.radio if r.label == label)
+
+check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
+      str(radio(at, "Data source").value))
 succ = " ".join(s.value for s in at.success)
 check("states 0 credits", "0 API credits" in succ, succ[:100])
 
@@ -222,7 +228,7 @@ check("single stock renders", not at.exception, str(at.exception)[:300] if at.ex
 labels = {m.label: m.value for m in at.metric}
 check("6M probability shown", labels.get("6M probability", "—") != "—", str(labels.get("6M probability")))
 check("12M probability shown", labels.get("12M probability", "—") != "—")
-check("reliability shown", "Model reliability" in labels)
+check("reliability shown", "Machine learning model reliability" in labels)
 check("risk shown", "Annualised volatility" in labels)
 # The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
 # onto a canvas whose cells clip long text, and this table is read rather than
@@ -245,11 +251,11 @@ if feat:
           "Not available." in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
-at.radio[1].set_value("Best 10").run()
-btn = [b for b in at.button if "best 10" in (b.label or "").lower()]
+radio(at, "Analysis").set_value("Machine Learning Top Picks (Ranked 1-10)").run()
+btn = [b for b in at.button if "top picks" in (b.label or "").lower()]
 if btn:
     btn[0].click().run()
-    check("Best 10 runs offline", not at.exception, str(at.exception)[:300] if at.exception else "")
+    check("Top picks run offline", not at.exception, str(at.exception)[:300] if at.exception else "")
     rank = [d.value for d in at.dataframe if "Probability up" in list(d.value.columns)]
     check("ranking produced", len(rank) > 0)
     if rank:

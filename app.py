@@ -113,12 +113,12 @@ def predict(features: pd.DataFrame, artifact: dict[str, Any] | None,
     A confident-looking probability built on missing data is worse than none.
     """
     if not artifact:
-        return {"available": False, "reason": f"No trained model for the {horizon} horizon."}
+        return {"available": False, "reason": f"No trained machine learning model for the {horizon} horizon."}
     model_features = list(artifact.get("feature_names", []))
     missing_columns = [c for c in model_features if c not in features.columns]
     if missing_columns:
         return {"available": False,
-                "reason": "Some model inputs are unavailable for this company.",
+                "reason": "Some machine learning model inputs are unavailable for this company.",
                 "missing": missing_columns}
 
     frame = features[model_features]
@@ -126,12 +126,12 @@ def predict(features: pd.DataFrame, artifact: dict[str, Any] | None,
     if completeness < nq.MIN_DATA_COMPLETENESS:
         absent = [c for c in model_features if pd.isna(frame.iloc[0][c])]
         return {"available": False,
-                "reason": "Too many model inputs are missing for a reliable prediction.",
+                "reason": "Too many machine learning model inputs are missing for a reliable prediction.",
                 "missing": absent, "data_quality": completeness}
     try:
         probability = float(artifact["pipeline"].predict_proba(frame)[0, 1])
     except Exception:
-        return {"available": False, "reason": "The model could not score this company."}
+        return {"available": False, "reason": "The machine learning model could not score this company."}
     return {"available": True, "probability": probability, "data_quality": completeness}
 
 
@@ -231,7 +231,7 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════
 
 def configure_page() -> None:
-    st.set_page_config(page_title="NusaQuant — IDX Market Intelligence",
+    st.set_page_config(page_title="NusaQuant — IDX Machine Learning Intelligence",
                        page_icon="◧", layout="wide")
     # Tabular figures: this dashboard is mostly numbers, and a column of
     # prices that does not align is harder to scan.
@@ -254,6 +254,17 @@ def configure_page() -> None:
       .nq-sec {{ font-size:1.05rem; font-weight:600; margin:1.4rem 0 .5rem;
                  padding-bottom:.3rem; border-bottom:1px solid {GRID}; }}
       .nq-note {{ color:{MUTED}; font-size:.84rem; line-height:1.55; }}
+      .nq-tile {{ padding:.1rem 0 .3rem; }}
+      .nq-tile-label {{ color:{MUTED}; font-size:.8rem; line-height:1.3;
+                        margin-bottom:.15rem; }}
+      .nq-tile-value {{ font-size:1.15rem; font-weight:600; line-height:1.3;
+                        font-variant-numeric:tabular-nums;
+                        overflow-wrap:anywhere; }}
+      .nq-tile-band {{ font-size:.8rem; font-weight:600; margin-top:.1rem; }}
+      .nq-tile-help {{ display:inline-block; margin-left:.3rem; width:.95rem;
+                       height:.95rem; line-height:.95rem; text-align:center;
+                       border:1px solid {GRID}; border-radius:50%;
+                       font-size:.65rem; cursor:help; }}
       .nq-foot {{ margin:2.5rem 0 .5rem; padding-top:1rem;
                   border-top:1px solid {GRID}; color:{MUTED}; font-size:.8rem;
                   line-height:1.6; }}
@@ -330,7 +341,7 @@ def render_missing_models() -> None:
     """Never invent a prediction to fill the gap — explain the actual cause."""
     report = diagnose_models()
     if report["diagnosis"] == "unreadable":
-        st.error("**Model files exist but could not be loaded.**\n\n"
+        st.error("**Machine learning model files exist but could not be loaded.**\n\n"
                  "Almost always a library version mismatch: a pickled pipeline "
                  "is not portable across major scikit-learn or xgboost versions. "
                  "Re-run `python train.py`, or match the versions in "
@@ -401,7 +412,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
 
         st.divider()
-        mode = st.radio("Analysis", ["Single Stock", "Best 10"],
+        mode = st.radio("Analysis", ['Single Stock Analysis', 'Machine Learning Top Picks (Ranked 1-10)'],
                         label_visibility="collapsed")
         window = st.radio("Price history", list(PRICE_WINDOWS), horizontal=True)
 
@@ -460,6 +471,8 @@ def render_profile(company: dict, predictions: dict, technical: dict) -> None:
 def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.DataFrame:
     section(f"Price history — {window}")
     years = PRICE_WINDOWS[window]
+    style = st.radio("Chart style", ["Line", "Candlestick"], horizontal=True,
+                     label_visibility="collapsed", key="chart_style")
 
     if offline:
         prices = company["prices"]
@@ -485,16 +498,36 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
     line_colour = POSITIVE if gained else NEGATIVE
     fill = "rgba(31,122,90,.10)" if gained else "rgba(179,52,31,.10)"
 
+    ohlc = [c for c in ("open", "high", "low") if c in history.columns]
+    # A candlestick needs the whole bar. Roughly half the cached companies
+    # carry open/high/low and the rest carry only a close, so the choice is
+    # offered and then honestly withdrawn where it cannot be drawn.
+    can_candle = (len(ohlc) == 3
+                  and history[ohlc].notna().all(axis=1).sum() >= 10)
+    candle = style == "Candlestick" and can_candle
+    if style == "Candlestick" and not can_candle:
+        st.info("This company's price history carries only a closing price, "
+                "so there is no open, high and low to build a candle from. "
+                "Showing the line instead.")
+
     has_volume = "volume" in history.columns and history["volume"].notna().any()
     figure = make_subplots(
         rows=2 if has_volume else 1, cols=1, shared_xaxes=True,
         row_heights=[0.76, 0.24] if has_volume else [1.0], vertical_spacing=0.04)
 
-    figure.add_trace(go.Scatter(
-        x=history["date"], y=close, mode="lines", name="Close",
-        line={"color": line_colour, "width": 1.8},
-        fill="tozeroy", fillcolor=fill,
-        hovertemplate="Rp %{y:,.0f}<extra>Close</extra>"), row=1, col=1)
+    if candle:
+        figure.add_trace(go.Candlestick(
+            x=history["date"], open=history["open"], high=history["high"],
+            low=history["low"], close=history["close"], name="Price",
+            increasing={"line": {"color": POSITIVE}, "fillcolor": POSITIVE},
+            decreasing={"line": {"color": NEGATIVE}, "fillcolor": NEGATIVE},
+            showlegend=False), row=1, col=1)
+    else:
+        figure.add_trace(go.Scatter(
+            x=history["date"], y=close, mode="lines", name="Close",
+            line={"color": line_colour, "width": 1.8},
+            fill="tozeroy", fillcolor=fill,
+            hovertemplate="Rp %{y:,.0f}<extra>Close</extra>"), row=1, col=1)
 
     # Moving averages are drawn only where they are fully formed. A 200-day
     # average seeded from 30 days of data is not a 200-day average.
@@ -522,6 +555,8 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
     # empty space and every move in it looks flat. Clip the view to the data,
     # padded, and let the fill disappear off the bottom.
     span = [float(np.nanmin(close)), float(np.nanmax(close))]
+    if candle:
+        span = [float(np.nanmin(history["low"])), float(np.nanmax(history["high"]))]
     for column in ("ma50", "ma200"):
         if column in averages and averages[column].notna().any():
             span[0] = min(span[0], float(averages[column].min()))
@@ -560,38 +595,31 @@ def render_technical(technical: dict, window: str) -> None:
         st.info("Not enough price history in this window to describe a trend.")
         return
 
-    columns = st.columns(6)
-    columns[0].metric("Trend", technical["trend"],
-                      help="Price against its own 50- and 200-day averages. "
-                           "Above both is an uptrend and below both a "
-                           "downtrend; above the 50 but under the 200 is "
-                           "recovering, and the reverse is weakening.")
     rsi = nq._to_float(technical.get("rsi14"))
-    columns[1].metric("RSI (14)",
-                      f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
-                      nq.rsi_band(rsi) if np.isfinite(rsi) else None,
-                      # delta_color="off": these bands are states, not changes.
-                      # Streamlit paints a text delta green with an up arrow,
-                      # which put a rising green "Bearish" next to a negative
-                      # MACD -- the exact opposite of what the number says.
-                      delta_color="off",
-                      help="Relative Strength Index over 14 days. Above 70 is "
-                           "conventionally read as overbought and below 30 as "
-                           "oversold; between them is neutral.")
     histogram = nq._to_float(technical.get("macd_histogram"))
-    columns[2].metric("MACD (12,26,9)",
-                      f"{histogram:+,.1f}" if np.isfinite(histogram)
-                      else "Insufficient history",
-                      nq.macd_band(histogram) if np.isfinite(histogram) else None,
-                      delta_color="off",
-                      help="Moving Average Convergence Divergence. The figure is "
-                           "the histogram: the MACD line less its signal line. "
-                           "Above zero the shorter average is pulling ahead of "
-                           "the longer one, below zero it is falling behind.")
-    columns[3].metric("From 52-week high",
-                      nq.format_percent(technical.get("from_52w_high"), 0))
-    columns[4].metric("6-month return", nq.format_percent(technical.get("return_6m"), 0))
-    columns[5].metric("12-month return", nq.format_percent(technical.get("return_12m"), 0))
+    columns = st.columns(6)
+
+    tile(columns[0], "Trend", technical["trend"], technical["trend"],
+         "Price against its own 50- and 200-day averages. Above both is an "
+         "uptrend and below both a downtrend; above the 50 but under the 200 "
+         "is recovering, and the reverse is weakening.")
+    tile(columns[1], "RSI (14)",
+         f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
+         nq.rsi_band(rsi) if np.isfinite(rsi) else None,
+         "Relative Strength Index over 14 days. Above 70 is conventionally "
+         "read as overbought and below 30 as oversold; between them is neutral.")
+    tile(columns[2], "MACD (12, 26, 9)",
+         f"{histogram:+,.1f}" if np.isfinite(histogram) else "Insufficient history",
+         nq.macd_band(histogram) if np.isfinite(histogram) else None,
+         "Moving Average Convergence Divergence. The figure is the histogram: "
+         "the MACD line less its signal line. Above zero the shorter average "
+         "is pulling ahead of the longer one, below zero it is falling behind.")
+    tile(columns[3], "From 52-week high",
+         nq.format_percent(technical.get("from_52w_high"), 0))
+    tile(columns[4], "6-month return",
+         nq.format_percent(technical.get("return_6m"), 0))
+    tile(columns[5], "12-month return",
+         nq.format_percent(technical.get("return_12m"), 0))
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):
@@ -650,6 +678,81 @@ def render_income_chart(company: dict) -> None:
          f"says which.")
 
 
+def render_momentum_charts(prices: pd.DataFrame) -> None:
+    """RSI and MACD as charts. The tiles below give the latest reading only."""
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return
+    history = prices.sort_values("date").reset_index(drop=True)
+    close = history["close"].astype(float)
+    if len(close) < 60:
+        st.info("Not enough price history in this window to chart RSI or MACD.")
+        return
+
+    rsi = nq.rsi_series(close)
+    macd = nq.macd_series(close)
+
+    figure = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                           row_heights=[0.45, 0.55], vertical_spacing=0.10,
+                           subplot_titles=("RSI (14)", "MACD (12, 26, 9)"))
+
+    figure.add_trace(go.Scatter(
+        x=history["date"], y=rsi, mode="lines", name="RSI",
+        line={"color": ACCENT, "width": 1.4},
+        hovertemplate="%{y:.0f}<extra>RSI</extra>"), row=1, col=1)
+    # 70 and 30 are the conventional bands, drawn so the line has something to
+    # be read against rather than floating on an empty axis.
+    for level, colour in ((70, NEGATIVE), (30, POSITIVE)):
+        figure.add_hline(y=level, line={"color": colour, "width": 1, "dash": "dot"},
+                         opacity=.5, row=1, col=1)
+    figure.update_yaxes(range=[0, 100], gridcolor=GRID, row=1, col=1,
+                        tickvals=[30, 50, 70])
+
+    colours = [POSITIVE if v >= 0 else NEGATIVE for v in macd["histogram"].fillna(0)]
+    figure.add_trace(go.Bar(
+        x=history["date"], y=macd["histogram"], name="Histogram",
+        marker={"color": colours},
+        hovertemplate="%{y:,.1f}<extra>Histogram</extra>"), row=2, col=1)
+    figure.add_trace(go.Scatter(
+        x=history["date"], y=macd["macd"], mode="lines", name="MACD",
+        line={"color": ACCENT, "width": 1.4},
+        hovertemplate="%{y:,.1f}<extra>MACD</extra>"), row=2, col=1)
+    figure.add_trace(go.Scatter(
+        x=history["date"], y=macd["signal"], mode="lines", name="Signal",
+        line={"color": COST, "width": 1.4},
+        hovertemplate="%{y:,.1f}<extra>Signal</extra>"), row=2, col=1)
+    figure.update_yaxes(gridcolor=GRID, zerolinecolor=GRID, row=2, col=1)
+
+    figure.update_layout(
+        height=430, margin={"l": 0, "r": 0, "t": 40, "b": 0},
+        plot_bgcolor="white", paper_bgcolor="white", bargap=0.1,
+        hovermode="x unified", showlegend=False,
+        xaxis={"showgrid": False, "linecolor": GRID},
+        xaxis2={"showgrid": False, "linecolor": GRID})
+    figure.update_annotations(font_size=12, x=0, xanchor="left")
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+
+def tile(column, label: str, value: str, band: str | None = None,
+         help_text: str | None = None) -> None:
+    """A metric tile whose arrow and colour follow the band's own direction.
+
+    st.metric cannot do this: it picks the arrow from whether the delta string
+    starts with a minus, so a text band like "Bearish" always came out green
+    and rising — the opposite of what the number underneath it said.
+    """
+    direction = nq.band_direction(band) if band else 0
+    arrow, colour = {1: ("\u25b2", POSITIVE), -1: ("\u25bc", NEGATIVE),
+                     0: ("", MUTED)}[direction]
+    hint = (f"<span class='nq-tile-help' title='{escape(help_text)}'>?</span>"
+            if help_text else "")
+    band_html = (f"<div class='nq-tile-band' style='color:{colour}'>"
+                 f"{arrow} {escape(band)}</div>" if band else "")
+    column.markdown(
+        f"<div class='nq-tile'><div class='nq-tile-label'>{escape(label)}{hint}</div>"
+        f"<div class='nq-tile-value'>{escape(value)}</div>{band_html}</div>",
+        unsafe_allow_html=True)
+
+
 def render_features(company: dict, model_features: list[str]) -> None:
     section("Fundamental metrics")
     row = company["features"].iloc[0]
@@ -701,16 +804,18 @@ def render_features(company: dict, model_features: list[str]) -> None:
 
     modelled = sum(1 for f in nq.FEATURE_SCHEMA if f.modelled)
     note(f"Values are as reported for the latest available financial period. A "
-         f"high or low reading is not automatically good or bad — the model "
+         f"high or low reading is not automatically good or bad — the machine "
+         f"learning model "
          f"weighs these together rather than applying a rule to any single one."
          f"<br><br><strong>In model</strong> has three states. "
          f"<em>Yes</em> and <em>No (dropped)</em> apply to the {modelled} "
-         f"scale-free ratios the model is allowed to read; dropped means the "
+         f"scale-free ratios the machine learning model may read; dropped means the "
          f"ratio was missing for more than {nq.MAX_FEATURE_MISSINGNESS:.0%} of "
          f"the training panel, so training left it out rather than impute its "
          f"way around the gap. <em>Reference</em> is everything measured in "
          f"rupiah: shown because a reader wants it, never modelled, because a "
-         f"level would let the model split on company size rather than on value."
+         f"level would let the machine learning model split on company size rather "
+         f"than on value."
          f"<br><br>A dash is a metric this company did not file for the period, "
          f"or one that would be economically meaningless — a P/E on a loss "
          f"is a category error, not a cheap stock — and the Meaning column "
@@ -743,7 +848,7 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
         note(nq.explain_probability(probability, horizon, has_edge))
 
     columns = st.columns(4)
-    columns[0].metric("Model reliability", reliability.get("label", "Unknown"))
+    columns[0].metric("Machine learning model reliability", reliability.get("label", "Unknown"))
     columns[1].metric("Out-of-sample ROC-AUC",
                       f"{metrics.get('roc_auc', float('nan')):.3f}"
                       if np.isfinite(nq._to_float(metrics.get("roc_auc"))) else "—")
@@ -757,14 +862,15 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
         tickers = (artifact or {}).get("n_training_tickers")
         panel = f" — {tickers} tickers" if tickers else ""
         st.warning(
-            f"**This model has no measurable edge.** Across purged walk-forward "
+            f"**This machine learning model has no measurable edge.** Across purged "
+            "walk-forward "
             f"folds it did not rank winners above losers by more than chance, so "
             f"its probabilities are deliberately shrunk toward the historical "
             f"base rate. Read the number as *how often stocks in this universe "
             f"rose over this horizon*, not as a view on this company. The limit "
             f"is the size of the training panel{panel} — not the algorithm.")
     elif reliability.get("label") == "Weak":
-        st.warning("This model provides limited predictive separation on "
+        st.warning("This machine learning model provides limited predictive separation on "
                    "out-of-sample data. Treat the probability as weak evidence, "
                    "not a signal.")
 
@@ -815,7 +921,7 @@ def render_risk(prices: pd.DataFrame, window: str) -> None:
 
 
 def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -> None:
-    section("Stock analysis")
+    section('Single Stock Analysis')
     if companies.empty:
         st.error("No companies available."); return
 
@@ -861,8 +967,9 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     # from whatever the chart just fetched rather than not at all.
     if not technical.get("available"):
         technical = nq.technical_state(prices)
-    render_income_chart(company)
+    render_momentum_charts(prices)
     render_technical(technical, controls["window"])
+    render_income_chart(company)
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
 
@@ -881,7 +988,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 # ══════════════════════════════════════════════════════════════════════
 
 def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> None:
-    section("Best 10 stocks")
+    section('Machine Learning Top Picks (Ranked 1-10)')
     if not models:
         render_missing_models(); return
 
@@ -889,11 +996,12 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
                                label_visibility="collapsed") == "6 Months" else "12m"
     artifact = models.get(horizon)
     if not artifact:
-        st.info("No model for this horizon."); return
+        st.info("No machine learning model for this horizon."); return
 
     if not artifact.get("has_edge", True):
         st.warning(
-            "**This ranking is not evidence.** The model for this horizon showed "
+            "**This ranking is not evidence.** The machine learning model for this "
+            "horizon showed "
             "no measurable out-of-sample edge, so the order below reflects how it "
             "sorts fundamentals in training, not a validated ability to pick "
             "winners. It is shown for inspection of the pipeline, not as a "
@@ -911,7 +1019,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     else:
         st.caption(f"Estimated cost: about {size * CREDITS_PER_COMPANY:,} API credits.")
 
-    if not st.button("Show best 10", type="primary"):
+    if not st.button("Show top picks", type="primary"):
         st.info("Press the button to rank the universe."); return
 
     universe = companies.head(size)
@@ -968,7 +1076,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     top = qualified.head(10)
     months = "6" if horizon == "6m" else "12"
     reliability = artifact.get("reliability", {}).get("label", "Unknown")
-    st.markdown(f"#### Best {len(top)} — {months} month outlook")
+    st.markdown(f"#### Top {len(top)} — {months} month outlook")
     st.dataframe(pd.DataFrame({
         "Rank": range(1, len(top) + 1),
         "Ticker": top.ticker.to_numpy(),
@@ -985,10 +1093,13 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     # Reliability is a property of the model, not of a row, so repeating it
     # down every line of the table only made the columns narrower.
     note(f"<strong>How to read this table.</strong> Stocks are ranked by the "
-         f"model's estimated probability of a positive return over the horizon. "
-         f"Model reliability for this horizon is <strong>{reliability}</strong>, "
+         f"machine learning model's estimated probability of a positive return "
+         f"over the horizon. "
+         f"Machine learning model reliability for this horizon is "
+         f"<strong>{reliability}</strong>, "
          f"and it applies to every row equally. Risk and trend are measured "
-         f"from price history alone, independently of the model, because a high "
+         f"from price history alone, independently of the machine learning model, "
+         f"because a high "
          f"probability does not automatically mean low risk.")
 
     excluded = ranked[~ranked.eligible]
@@ -1006,7 +1117,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
 def main() -> None:
     configure_page()
     st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nq-sub">IDX Market Intelligence · XGBoost probability '
+    st.markdown('<div class="nq-sub">IDX Machine Learning Intelligence · XGBoost probability '
                 'estimates for positive 6-month and 12-month returns.</div>',
                 unsafe_allow_html=True)
 
@@ -1036,7 +1147,7 @@ def main() -> None:
         if companies.empty:
             st.error("The Sectors universe came back empty."); return
 
-    if controls["mode"] == "Single Stock":
+    if controls["mode"] == 'Single Stock Analysis':
         render_single_stock(companies, models, controls)
     else:
         render_best_10(companies, models, controls)

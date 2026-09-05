@@ -1,7 +1,8 @@
 # NusaQuant © 2026 Patty Kyoudai
 
-**IDX market-intelligence dashboard that ranks Indonesian stocks by the
-model-estimated probability of a positive return over 6 and 12 months.**
+**IDX machine-learning intelligence dashboard that ranks Indonesian stocks
+by the machine learning model's estimated probability of a positive return
+over 6 and 12 months.**
 
 Data: [Sectors Financial API v2](https://docs.sectors.app/). Model: XGBoost.
 
@@ -63,10 +64,10 @@ never written to disk, never logged, and is sent only in a request header.
 
 ## The metrics
 
-Twenty-three metrics in six categories, all reconstructible point-in-time from
+Twenty-four metrics in six categories, all reconstructible point-in-time from
 the v2 API and all computed from the cached snapshot at zero credits. Only the
-scale-free ratios are model inputs; the rest are shown because a reader wants
-them.
+scale-free ratios are machine learning model inputs; the rest are shown
+because a reader wants them.
 
 | Category | Metrics | In model |
 |---|---|---|
@@ -77,7 +78,7 @@ them.
 | Income Statement | Revenue, Gross Profit, EBITDA, Net Income | no — rupiah amounts |
 | Balance Sheet | Cash, Total Assets, Total Liabilities, Total Equity | no — rupiah amounts |
 
-**Rupiah amounts are never model inputs.** A bank with IDR 1,600T of assets and
+**Rupiah amounts are never machine learning model inputs.** A bank with IDR 1,600T of assets and
 a small cap with IDR 2T are not on one scale, and a tree that splits on the
 level is splitting on company size rather than on value. Eleven scale-free
 ratios are eligible; the missingness gate then keeps whichever clear it, which
@@ -98,6 +99,41 @@ deposits, NIM needs net interest income and earning assets, and the dividend
 ratios need a dividend history. The quarterly financials endpoint returns none
 of them, so every company would show an empty row forever. They are documented
 here rather than listed in the dashboard.
+
+---
+
+## What the dashboard shows
+
+Two views, chosen in the sidebar.
+
+**Single Stock Analysis** — one company end to end: profile, price history,
+momentum, trend, income statement and every metric.
+
+**Machine Learning Top Picks (Ranked 1-10)** — the universe scored and ranked
+by the machine learning model's probability, with risk and trend measured
+separately from price history alone.
+
+The single-stock page runs in this order:
+
+| Section | What it is |
+|---|---|
+| Price history | Line or candlestick, MA50 and MA200, volume beneath |
+| RSI and MACD | Charted over the same window |
+| Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
+| Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
+| Fundamental metrics | All twenty-four, grouped by category |
+| 6-month and 12-month outlook | Probability, reliability, out-of-sample AUC, fold count |
+| Historical risk | Volatility, drawdown, downside volatility, turnover |
+
+**Candlestick needs a full bar.** Roughly half the cached companies carry open,
+high and low; the rest carry only a close. The toggle is offered either way and
+says plainly when it has to fall back to the line.
+
+**The technical block is descriptive, never predictive**, and is deliberately
+kept out of the machine learning model. Momentum and volatility were tested as
+model features on this panel and did not earn a place. An arrow points up in
+green for bullish or oversold, down in red for bearish or overbought, and is
+absent and grey for neutral.
 
 ---
 
@@ -184,7 +220,8 @@ calibration + 15% stability, and each of those three qualifiers is doing work:
 
 **A model with no measurable edge says so.** Below an out-of-sample ROC-AUC of
 0.55 the reliability label becomes *No measurable edge*, the probability band
-stops naming an edge it cannot demonstrate, and the Best 10 carries a warning
+stops naming an edge it cannot demonstrate, and the Top Picks view carries a
+warning
 that its ordering is not evidence. A model cannot accumulate its way to a
 reassuring label on calibration and consistency alone; those describe a
 well-behaved forecast of the base rate, which is a different claim from a
@@ -197,13 +234,13 @@ high probability of a positive return can still be violently volatile.
 
 ## What the current snapshot actually measures
 
-On the shipped 15-ticker snapshot, **neither horizon has a measurable edge**:
+On the shipped 25-ticker snapshot, **neither horizon has a measurable edge**:
 
 | | 6M | 12M |
 |---|---:|---:|
 | Purged folds | 9 | 5 |
-| Out-of-sample rows | 135 | 75 |
-| ROC-AUC (mean within fold) | 0.470 | 0.478 |
+| Out-of-sample rows | 217 | 120 |
+| ROC-AUC (mean within fold) | 0.521 | 0.498 |
 | Baseline ROC-AUC | 0.500 | 0.500 |
 | Beats the prior-only baseline on log loss | no | no |
 | Reliability | No measurable edge | No measurable edge |
@@ -216,12 +253,12 @@ ranking view.
 return, and over 6–12 months that sign is mostly the market's, not the
 company's — the per-quarter base rate in this panel runs from 0.00 to 1.00, and
 cross-sectional fundamentals carry no information about the market's own
-direction. On top of that, fifteen tickers means each quarterly cross-section
-is fifteen points wide. The binding constraint is the **width of the universe**,
+direction. On top of that, twenty-five tickers means each quarterly
+cross-section is twenty-five points wide. The binding constraint is the **width of the universe**,
 not the algorithm: every model tried, linear and tree, on fundamentals, on
 zero-credit price features, and on both, landed between 0.40 and 0.53
 out of sample. Widening the universe adds far more effective sample than adding
-history to the same fifteen names.
+history to the same names.
 
 ## Limitations
 
@@ -232,7 +269,7 @@ history to the same fifteen names.
   publication dates, which the API does not reliably expose.
 - **Overlapping targets.** Consecutive observations share most of their forward
   window, so the effective sample is smaller than the row count.
-- **Small dataset on a small budget.** ~200 rows across 15 companies cannot
+- **Small dataset on a small budget.** ~340 rows across 25 companies cannot
   support a strong claim, and on this snapshot it does not support one at all.
 - **The target carries the market.** See above — this caps how well any model
   built only on cross-sectional fundamentals can score.
