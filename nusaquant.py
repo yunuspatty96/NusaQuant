@@ -200,8 +200,18 @@ API_HELP = (
 
 
 def api_request(path: str, api_key: str, params: dict[str, Any] | None = None,
-                *, timeout: int = 30, max_retries: int = 3) -> Any:
-    """One GET against Sectors v2. Retries 429 and 5xx, never leaks the key."""
+                *, timeout: int = 30, max_retries: int = 5) -> Any:
+    """One GET against Sectors v2. Retries 429 and 5xx, never leaks the key.
+
+    A 429 is backed off much harder than a server error. Sectors returns 429
+    for a per-second rate limit as well as for an exhausted quota, and the two
+    look identical from here — but they want opposite things. Waiting one
+    second and trying twice, which is what this used to do, is far too
+    impatient for the first and pointless for the second. One collection run
+    lost nine tickers to 429s that were interleaved with successes, which is
+    the signature of a rate limit rather than an empty account: an empty
+    account fails everything after the first failure, and this did not.
+    """
     url = f"{API_BASE_URL}/{path.lstrip('/')}"
     clean = {k: v for k, v in (params or {}).items() if v is not None}
 
@@ -244,7 +254,12 @@ def api_request(path: str, api_key: str, params: dict[str, Any] | None = None,
         detail = f"HTTP {response.status_code} :: {response.text[:300]}"
         if retryable and attempt < max_retries - 1:
             wait = response.headers.get("Retry-After")
-            time.sleep(float(wait) if wait and wait.isdigit() else 2 ** attempt)
+            if wait and wait.isdigit():
+                time.sleep(float(wait))
+            else:
+                # 3s, 6s, 12s, 24s for a rate limit; 1s, 2s, 4s, 8s otherwise.
+                base = 3 if response.status_code == 429 else 1
+                time.sleep(base * 2 ** attempt)
             continue
         # Sectors bills on the response: 2xx costs the endpoint's stated price
         # and 404 costs 1, but 400, 401/403, 429 and 5xx are free.
