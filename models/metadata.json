@@ -31,32 +31,35 @@
     "DCII",
     "DNET",
     "DSSA",
+    "EMAS",
     "ICBP",
     "MORA",
+    "MPRO",
+    "PANI",
     "SMMA",
     "SRAJ",
     "TLKM",
     "TPIA"
   ],
   "training_end_date": "2026-06-29",
-  "dataset_rows": 281,
-  "n_tickers": 19,
+  "dataset_rows": 306,
+  "n_tickers": 22,
   "reporting_lag_days": 90,
   "snapshot_as_of": "2026-06-30",
   "validation": {
     "6m": {
       "model": "xgb_depth2",
-      "shrinkage_weight": 0.25,
+      "shrinkage_weight": 0.3,
       "folds": 9,
-      "roc_auc": 0.48311117894451233,
+      "roc_auc": 0.513678928361468,
       "reliability": "No measurable edge",
       "has_edge": false
     },
     "12m": {
       "model": "xgb_depth1",
-      "shrinkage_weight": 0.95,
+      "shrinkage_weight": 0.8,
       "folds": 5,
-      "roc_auc": 0.5130952380952382,
+      "roc_auc": 0.5086538461538461,
       "reliability": "No measurable edge",
       "has_edge": false
     }
