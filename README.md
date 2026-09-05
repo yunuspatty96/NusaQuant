@@ -122,7 +122,7 @@ row forever. They are documented here rather than listed in the dashboard.
 
 ## What the dashboard shows
 
-Two views, chosen in the sidebar.
+Three views, chosen in the sidebar.
 
 **Single Stock Analysis** — one company end to end: profile, price history,
 momentum, trend, income statement and every metric.
@@ -155,7 +155,7 @@ The single-stock page runs in this order:
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
-| Fundamental metrics | All twenty-four, grouped by category |
+| Fundamental metrics | All twenty-seven, grouped by category |
 | 6-month and 12-month outlook | Probability, reliability, out-of-sample AUC, fold count |
 | Historical risk | Volatility, drawdown, downside volatility, turnover |
 
