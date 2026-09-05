@@ -164,6 +164,58 @@ def _prioritise_cached(universe: pd.DataFrame, target: int) -> pd.DataFrame:
     return pd.concat([already, fresh.head(room)], ignore_index=True)
 
 
+def fetch_sectors(api_key: str) -> int:
+    """One screen, one credit: attach IDX classification to the cached universe."""
+    meter = nq.CreditMeter(budget=5)
+    nq.set_credit_meter(meter)
+    print("Screening the universe for sector, sub-sector and industry…")
+
+    raw: list = []
+    try:
+        fresh = nq.get_company_classification(
+            api_key, where=UNIVERSE_FILTER, limit=200, raw=raw)
+    except nq.SectorsAPIError as exc:
+        print(f"\nThe screen failed: {exc.message}")
+        if exc.detail:
+            print(f"  {exc.detail}")
+        return 1
+    finally:
+        nq.set_credit_meter(None)
+
+    # The payload is printed whatever happens. The call costs a credit either
+    # way, and if the parse comes back empty the raw row is what tells us why.
+    if raw:
+        print("\nFirst result exactly as the API returned it:")
+        print(f"  {json.dumps(raw[0], indent=2, default=str)[:900]}")
+
+    if fresh.empty:
+        print("\nThe screen returned no companies.")
+        return 1
+
+    filled = {f: int(fresh[f].notna().sum()) for f in nq.CLASSIFICATION_FIELDS
+              if f in fresh.columns}
+    print(f"\n{len(fresh)} companies screened. Classification filled in: "
+          + ", ".join(f"{k} {v}/{len(fresh)}" for k, v in filled.items()))
+
+    if not any(filled.values()):
+        print("\nNo classification came back. include_query_values did not "
+              "attach the fields, so sector must come from company/report "
+              "instead, at 1 credit per company.")
+        return 1
+
+    merged = nq.merge_universe(nq.load_universe(), fresh)
+    nq.cache_universe(merged)
+    cached = nq.cached_tickers()
+    covered = merged[merged["symbol"].isin(cached)]
+    print(f"Cached universe now holds {len(merged)} companies, "
+          f"{len(covered)} of which have collected data.")
+    for row in covered.head(8).itertuples():
+        print(f"  {row.symbol:<6} {getattr(row, 'sector', None) or '—':<26} "
+              f"{getattr(row, 'sub_sector', None) or '—'}")
+    print(f"\nCredits spent: {meter.spent}. Re-running the dashboard is free.")
+    return 0
+
+
 def collect_offline():
     """Rebuild the universe and panel purely from ``data/cache/``.
 
@@ -651,10 +703,16 @@ def main() -> int:
                         help="Show the plan and cost, fetch nothing.")
     parser.add_argument("--force", action="store_true",
                         help="Ignore the cache and re-fetch (spends credits again).")
+    parser.add_argument("--sectors", action="store_true",
+                        help="Fetch sector, sub-sector and industry for the "
+                             "universe and merge them into the cache. 1 credit.")
     parser.add_argument("--offline", action="store_true",
                         help="Re-train from data/cache/ only. No API key, no "
                              "network, no credits.")
     args = parser.parse_args()
+
+    if args.sectors:
+        return fetch_sectors(nq.get_api_key(args.api_key))
 
     if args.offline:
         meter = nq.CreditMeter(budget=0)

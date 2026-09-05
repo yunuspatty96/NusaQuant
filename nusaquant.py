@@ -300,6 +300,57 @@ def get_companies(api_key: str, *, where: str | None = None,
     return frame[["symbol", "company_name"]].drop_duplicates("symbol").reset_index(drop=True)
 
 
+#: The classification columns a screen can attach to each company.
+CLASSIFICATION_FIELDS = ("sector", "sub_sector", "industry")
+
+
+def get_company_classification(api_key: str, *, where: str | None = None,
+                               order_by: str = "-market_cap", limit: int = 200,
+                               raw: list | None = None) -> pd.DataFrame:
+    """Symbol, name and IDX classification for the whole universe. 1 credit.
+
+    The screener returns only symbol and company_name by default. Everything
+    else arrives through ``query_values``, which the endpoint fills in with the
+    fields the query referenced — so the classification columns are requested
+    by naming them in the ``where`` clause.
+
+    ``IS NOT NULL`` is used deliberately rather than an equality test: it names
+    the field, which is what makes it come back, without narrowing the universe
+    the way a real filter would. Every listed company has a sector, so the
+    condition costs nothing in coverage.
+
+    Pass ``raw`` to receive the untouched first result alongside the frame; the
+    call costs a credit either way and the payload is worth seeing when the
+    parse comes back thinner than expected.
+    """
+    conditions = [c for c in ([where] if where else [])
+                  + [f"{f} IS NOT NULL" for f in CLASSIFICATION_FIELDS]]
+    payload = api_request("companies/", api_key, {
+        "where": " and ".join(conditions),
+        "order_by": order_by,
+        "limit": min(limit, 200),
+        "include_query_values": "true"})
+
+    rows = payload.get("results", []) if isinstance(payload, dict) else []
+    if raw is not None and rows:
+        raw.append(rows[0])
+    if not rows:
+        return pd.DataFrame(columns=["symbol", "company_name", *CLASSIFICATION_FIELDS])
+
+    records = []
+    for row in rows:
+        values = row.get("query_values") or {}
+        record = {"symbol": normalise_symbol(row.get("symbol", "")),
+                  "company_name": row.get("company_name")}
+        for field in CLASSIFICATION_FIELDS:
+            # The endpoint has been seen to key these either at the top level
+            # or inside query_values, so both are accepted.
+            record[field] = values.get(field, row.get(field))
+        records.append(record)
+    frame = pd.DataFrame(records)
+    return frame.drop_duplicates("symbol").reset_index(drop=True)
+
+
 def get_company_report(api_key: str, ticker: str,
                        sections: Sequence[str] = ("overview",)) -> dict[str, Any]:
     """Company report. Costs 1 credit PER SECTION, so ask for one."""
@@ -437,6 +488,26 @@ def cache_as_of(base: str = "data") -> str:
     return "unknown" if newest is None else f"{newest:%Y-%m-%d}"
 
 
+def merge_universe(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    """Add columns and rows from a newer screen without losing older ones.
+
+    A later screen can miss a company that has since fallen below the filter,
+    and its cached price and fundamental data are already bought and paid for.
+    Columns are filled in rather than replaced wholesale for the same reason.
+    """
+    if existing is None or existing.empty:
+        return fresh.reset_index(drop=True) if fresh is not None else pd.DataFrame()
+    if fresh is None or fresh.empty:
+        return existing.reset_index(drop=True)
+    merged = existing.set_index("symbol").combine_first(fresh.set_index("symbol"))
+    for column in fresh.columns:
+        if column == "symbol":
+            continue
+        incoming = fresh.set_index("symbol")[column]
+        merged[column] = incoming.reindex(merged.index).fillna(merged.get(column))
+    return merged.reset_index()
+
+
 def cache_universe(universe: pd.DataFrame, base: str = "data") -> None:
     """Cache the screener result too — otherwise a re-run still costs 1 credit."""
     if universe is not None and not universe.empty:
@@ -456,6 +527,19 @@ def company_names(base: str = "data") -> dict[str, str]:
     return {normalise_symbol(row.symbol): str(row.company_name)
             for row in universe.itertuples()
             if isinstance(getattr(row, "company_name", None), str)}
+
+
+def company_classification(ticker: str, base: str = "data") -> dict[str, str]:
+    """Sector, sub-sector and industry from the cached screen, where present."""
+    universe = load_universe(base)
+    if universe.empty or "symbol" not in universe.columns:
+        return {}
+    match = universe[universe["symbol"].map(normalise_symbol) == normalise_symbol(ticker)]
+    if match.empty:
+        return {}
+    row = match.iloc[0]
+    return {f: str(row[f]) for f in CLASSIFICATION_FIELDS
+            if f in match.columns and isinstance(row.get(f), str) and row[f].strip()}
 
 
 def company_name(ticker: str, base: str = "data") -> str:
