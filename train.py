@@ -802,6 +802,7 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
             "feature_importance": feature_importance(estimator, features),
             "training_end_date": f"{resolved.observation_date.max():%Y-%m-%d}",
             "n_training_rows": int(len(resolved)),
+            "n_training_tickers": int(resolved.ticker.nunique()),
             "nusaquant_version": nq.__version__,
         }
         path = MODELS_DIR / f"model_{horizon}_xgb.joblib"

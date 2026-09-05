@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 import nusaquant as nq
 
@@ -196,7 +197,8 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
             market_cap = nq._to_float(latest.get("market_cap"))
             close = nq._to_float(latest.get("close"))
         overview = {"market_cap": market_cap, "last_close_price": close}
-        name = ticker
+        # The screener result is already cached, so the real name costs nothing.
+        name = nq.company_name(ticker)
     else:
         report = live_report(ticker, api_key)
         quarterly = live_quarterly(ticker, api_key, QUARTERS_FOR_INFERENCE)
@@ -228,14 +230,31 @@ def configure_page() -> None:
     # prices that does not align is harder to scan.
     st.markdown(f"""<style>
       html, body, [class*="css"] {{ font-feature-settings: "tnum" 1; }}
-      [data-testid="stMetricValue"] {{ font-size:1.5rem; font-variant-numeric:tabular-nums; }}
+      /* Metric values must wrap. A metric can hold a number four characters
+         wide or the words "No measurable edge", and at the old 1.5rem the
+         second one ran past its column and was clipped. Sized for the longest
+         label this dashboard can produce, not the shortest. */
+      [data-testid="stMetricValue"] {{
+        font-size:1.15rem; font-weight:600; line-height:1.3;
+        font-variant-numeric:tabular-nums;
+        white-space:normal; overflow-wrap:anywhere;
+      }}
       [data-testid="stMetricLabel"] {{ color:{MUTED}; }}
-      .nq-title {{ font-size:1.9rem; font-weight:650; letter-spacing:-.01em; margin-bottom:.1rem; }}
-      .nq-sub {{ color:{MUTED}; font-size:.95rem; }}
-      .nq-sec {{ font-size:1.1rem; font-weight:600; margin:1.4rem 0 .5rem;
+      [data-testid="stMetricLabel"] p {{ font-size:.8rem; line-height:1.3; }}
+      [data-testid="stMetric"] {{ overflow:visible; }}
+      .nq-title {{ font-size:1.6rem; font-weight:650; letter-spacing:-.01em; margin-bottom:.1rem; }}
+      .nq-sub {{ color:{MUTED}; font-size:.9rem; }}
+      .nq-sec {{ font-size:1.05rem; font-weight:600; margin:1.4rem 0 .5rem;
                  padding-bottom:.3rem; border-bottom:1px solid {GRID}; }}
-      .nq-note {{ color:{MUTED}; font-size:.86rem; line-height:1.5; }}
-      div[data-testid="stDataFrame"] {{ font-variant-numeric:tabular-nums; }}
+      .nq-note {{ color:{MUTED}; font-size:.84rem; line-height:1.55; }}
+      .nq-name {{ font-size:1.3rem; font-weight:650; letter-spacing:-.01em;
+                  line-height:1.3; margin:.2rem 0 .1rem; overflow-wrap:anywhere; }}
+      .nq-name span {{ color:{MUTED}; font-weight:450; }}
+      .nq-chip {{ display:inline-block; padding:.12rem .5rem; border-radius:10px;
+                  font-size:.76rem; font-weight:600; border:1px solid {GRID};
+                  color:{MUTED}; margin-right:.35rem; }}
+      div[data-testid="stDataFrame"] {{ font-variant-numeric:tabular-nums;
+                                        font-size:.86rem; }}
     </style>""", unsafe_allow_html=True)
 
 
@@ -361,12 +380,18 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 # SINGLE STOCK
 # ══════════════════════════════════════════════════════════════════════
 
-def render_profile(company: dict, predictions: dict) -> None:
-    st.markdown(f"### {company['ticker']}")
-    st.markdown(f"<div class='nq-sub'>{company['name']}</div>", unsafe_allow_html=True)
+def render_profile(company: dict, predictions: dict, technical: dict) -> None:
+    ticker, name = company["ticker"], company["name"]
+    heading = ticker if name == ticker else f"{ticker} <span>— {name}</span>"
+    st.markdown(f"<div class='nq-name'>{heading}</div>", unsafe_allow_html=True)
+
     overview = company["overview"]
-    if overview.get("sector"):
-        st.caption(f"{overview.get('sector')} · {overview.get('sub_sector', '—')}")
+    chips = [c for c in (overview.get("sector"), overview.get("sub_sector"),
+                         technical.get("trend") if technical.get("available") else None)
+             if c]
+    if chips:
+        st.markdown("".join(f"<span class='nq-chip'>{c}</span>" for c in chips),
+                    unsafe_allow_html=True)
 
     columns = st.columns(4)
     columns[0].metric("Latest close",
@@ -375,12 +400,19 @@ def render_profile(company: dict, predictions: dict) -> None:
     for column, horizon in ((columns[2], "6m"), (columns[3], "12m")):
         result = predictions.get(horizon, {})
         label = f"{'6' if horizon == '6m' else '12'}M probability"
-        column.metric(label, f"{result['probability'] * 100:.0f}%"
-                      if result.get("available") else "—")
+        if result.get("available"):
+            column.metric(label, f"{result['probability'] * 100:.0f}%")
+        else:
+            # Never a bare dash: an unavailable probability has a cause, and
+            # the cause is more useful than the punctuation.
+            column.metric(label, "Not available",
+                          help=result.get("reason", "Prediction unavailable."))
 
     period = company["latest_period"]
-    period_text = "—" if pd.isna(period) else f"Q{pd.Timestamp(period).quarter} {pd.Timestamp(period).year}"
+    period_text = ("not reported" if pd.isna(period)
+                   else f"Q{pd.Timestamp(period).quarter} {pd.Timestamp(period).year}")
     st.caption(f"Latest financial period: {period_text} · "
+               f"{company['n_quarters']} quarters on file · "
                f"Generated {dt.datetime.now():%Y-%m-%d %H:%M}")
 
 
@@ -405,33 +437,150 @@ def render_chart(company: dict, api_key: str, window: str, offline: bool) -> pd.
         st.info("No price history available for this window.")
         return prices
 
-    figure = go.Figure(go.Scatter(
-        x=prices["date"], y=prices["close"], mode="lines",
-        line={"color": ACCENT, "width": 1.6},
-        hovertemplate="%{x|%d %b %Y}<br>Rp %{y:,.0f}<extra></extra>"))
-    figure.update_layout(height=320, margin={"l": 0, "r": 0, "t": 10, "b": 0},
-                         plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
-                         hovermode="x unified",
-                         xaxis={"showgrid": False, "linecolor": GRID},
-                         yaxis={"gridcolor": GRID, "title": "Close (IDR)"})
+    history = prices.sort_values("date").reset_index(drop=True)
+    close = history["close"].astype(float)
+    first, last = float(close.iloc[0]), float(close.iloc[-1])
+    gained = last >= first
+    line_colour = POSITIVE if gained else NEGATIVE
+    fill = "rgba(31,122,90,.10)" if gained else "rgba(179,52,31,.10)"
+
+    has_volume = "volume" in history.columns and history["volume"].notna().any()
+    figure = make_subplots(
+        rows=2 if has_volume else 1, cols=1, shared_xaxes=True,
+        row_heights=[0.76, 0.24] if has_volume else [1.0], vertical_spacing=0.04)
+
+    figure.add_trace(go.Scatter(
+        x=history["date"], y=close, mode="lines", name="Close",
+        line={"color": line_colour, "width": 1.8},
+        fill="tozeroy", fillcolor=fill,
+        hovertemplate="Rp %{y:,.0f}<extra>Close</extra>"), row=1, col=1)
+
+    # Moving averages are drawn only where they are fully formed. A 200-day
+    # average seeded from 30 days of data is not a 200-day average.
+    averages = nq.moving_averages(history)
+    for window, colour, dash in ((50, ACCENT, "solid"), (200, MUTED, "dot")):
+        column = f"ma{window}"
+        if column in averages and averages[column].notna().any():
+            figure.add_trace(go.Scatter(
+                x=averages["date"], y=averages[column], mode="lines",
+                name=f"MA{window}",
+                line={"color": colour, "width": 1.1, "dash": dash},
+                hovertemplate="Rp %{y:,.0f}<extra>MA" + str(window) + "</extra>"),
+                row=1, col=1)
+
+    if has_volume:
+        figure.add_trace(go.Bar(
+            x=history["date"], y=history["volume"].astype(float), name="Volume",
+            marker={"color": GRID}, hovertemplate="%{y:,.0f}<extra>Volume</extra>"),
+            row=2, col=1)
+        figure.update_yaxes(title_text="Volume", row=2, col=1, gridcolor=GRID,
+                            showticklabels=False)
+
+    # The area fill runs to zero, but the axis must not: a stock trading
+    # between 4,000 and 8,000 drawn on a 0-8,000 axis loses half its range to
+    # empty space and every move in it looks flat. Clip the view to the data,
+    # padded, and let the fill disappear off the bottom.
+    span = [float(np.nanmin(close)), float(np.nanmax(close))]
+    for column in ("ma50", "ma200"):
+        if column in averages and averages[column].notna().any():
+            span[0] = min(span[0], float(averages[column].min()))
+            span[1] = max(span[1], float(averages[column].max()))
+    pad = max((span[1] - span[0]) * 0.08, span[1] * 0.02, 1.0)
+
+    figure.update_layout(
+        height=420 if has_volume else 340,
+        margin={"l": 0, "r": 0, "t": 30, "b": 0},
+        plot_bgcolor="white", paper_bgcolor="white", bargap=0.1,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02,
+                "xanchor": "left", "x": 0, "font": {"size": 11}},
+        xaxis={"showgrid": False, "linecolor": GRID},
+        xaxis2={"showgrid": False, "linecolor": GRID} if has_volume else None,
+        yaxis={"gridcolor": GRID, "title": "Close (IDR)",
+               "range": [span[0] - pad, span[1] + pad]})
+    figure.update_xaxes(rangeslider_visible=False, showspikes=True,
+                        spikemode="across", spikethickness=1,
+                        spikecolor=GRID, spikedash="dot")
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+    change = (last / first - 1.0) if first > 0 else np.nan
+    note(f"Over this window the close moved from "
+         f"{nq.format_rupiah(first, compact=False)} to "
+         f"{nq.format_rupiah(last, compact=False)}, a change of "
+         f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
+         f"there is enough history to form them.")
     return prices
+
+
+def render_technical(technical: dict, window: str) -> None:
+    """Descriptive trend state. Deliberately kept apart from the model."""
+    section("Technical state")
+    if not technical.get("available"):
+        st.info("Not enough price history in this window to describe a trend.")
+        return
+
+    columns = st.columns(5)
+    columns[0].metric("Trend", technical["trend"],
+                      help="Price against its own 50- and 200-day averages. "
+                           "Above both is an uptrend and below both a "
+                           "downtrend; above the 50 but under the 200 is "
+                           "recovering, and the reverse is weakening.")
+    rsi = nq._to_float(technical.get("rsi14"))
+    columns[1].metric("RSI (14)",
+                      f"{rsi:.0f}" if np.isfinite(rsi) else "Insufficient history",
+                      nq.rsi_band(rsi) if np.isfinite(rsi) else None)
+    columns[2].metric("From 52-week high",
+                      nq.format_percent(technical.get("from_52w_high"), 0))
+    columns[3].metric("6-month return", nq.format_percent(technical.get("return_6m"), 0))
+    columns[4].metric("12-month return", nq.format_percent(technical.get("return_12m"), 0))
+
+    ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
+    if np.isfinite(ma50) and np.isfinite(ma200):
+        cross = ("above" if ma50 > ma200 else "below")
+        note(f"MA50 is {cross} MA200 "
+             f"({nq.format_rupiah(ma50, compact=False)} versus "
+             f"{nq.format_rupiah(ma200, compact=False)}). "
+             + nq.EXPLANATIONS["technical"])
+    else:
+        note(nq.EXPLANATIONS["technical"])
 
 
 def render_features(company: dict, model_features: list[str]) -> None:
     section("Fundamental features used by the model")
     row = company["features"].iloc[0]
-    records = [{
-        "Feature": spec.label,
-        "Value": nq.format_feature(spec.name, row.get(spec.name)),
-        "Category": spec.category,
-        "Meaning": spec.meaning,
-    } for spec in nq.FEATURE_SCHEMA]
+    used = set(model_features or [])
+    records = []
+    for spec in nq.FEATURE_SCHEMA:
+        value = row.get(spec.name)
+        present = np.isfinite(nq._to_float(value))
+        records.append({
+            "Feature": spec.label,
+            "Value": nq.format_feature(spec.name, value),
+            "Category": spec.category,
+            # The parameter was accepted and then ignored, so the table never
+            # said which of the ten the shipped model actually reads. Three are
+            # dropped at training time for missingness, and a reader comparing
+            # this table against the model had no way to tell which.
+            "In model": ("Yes" if spec.name in used
+                         else "No (dropped)" if used else "Unknown"),
+            "Meaning": (spec.meaning if present
+                        else f"Not available. {nq.feature_absence_reason(spec.name)}"),
+        })
     st.dataframe(pd.DataFrame(records), width="stretch", hide_index=True,
-                 column_config={"Meaning": st.column_config.TextColumn(width="large")})
+                 column_config={
+                     "Feature": st.column_config.TextColumn(width="small"),
+                     "Value": st.column_config.TextColumn(width="small"),
+                     "Category": st.column_config.TextColumn(width="small"),
+                     "In model": st.column_config.TextColumn(width="small"),
+                     "Meaning": st.column_config.TextColumn(width="large")})
     note("Values are as reported for the latest available financial period. A "
          "high or low reading is not automatically good or bad — the model "
-         "weighs these together rather than applying a rule to any single one.")
+         "weighs these together rather than applying a rule to any single one. "
+         "A feature reading <em>n/a</em> is one this project refuses to "
+         "fabricate: the row says why it is absent. <em>In model: No "
+         "(dropped)</em> means the feature was missing for more than "
+         f"{nq.MAX_FEATURE_MISSINGNESS:.0%} of the training panel, so training "
+         "dropped it rather than impute its way around the gap.")
 
 
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
@@ -467,13 +616,18 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
     columns[3].metric("Data quality", f"{result.get('data_quality', 0) * 100:.0f}%")
 
     if not has_edge:
+        # The panel size is read from the artifact rather than written into the
+        # sentence: it was hard-coded at 15 and silently went stale the first
+        # time the universe grew.
+        tickers = (artifact or {}).get("n_training_tickers")
+        panel = f" — {tickers} tickers" if tickers else ""
         st.warning(
-            "**This model has no measurable edge.** Across purged walk-forward "
-            "folds it did not rank winners above losers by more than chance, so "
-            "its probabilities are deliberately shrunk toward the historical "
-            "base rate. Read the number as *how often stocks in this universe "
-            "rose over this horizon*, not as a view on this company. The limit "
-            "is the size of the training panel — 15 tickers — not the algorithm.")
+            f"**This model has no measurable edge.** Across purged walk-forward "
+            f"folds it did not rank winners above losers by more than chance, so "
+            f"its probabilities are deliberately shrunk toward the historical "
+            f"base rate. Read the number as *how often stocks in this universe "
+            f"rose over this horizon*, not as a view on this company. The limit "
+            f"is the size of the training panel{panel} — not the algorithm.")
     elif reliability.get("label") == "Weak":
         st.warning("This model provides limited predictive separation on "
                    "out-of-sample data. Treat the probability as weak evidence, "
@@ -529,11 +683,19 @@ def render_risk(prices: pd.DataFrame, window: str) -> None:
     metrics = nq.risk_metrics(prices, years)
     risk = nq.risk_score(metrics)
 
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric("Risk", risk["band"])
     columns[1].metric("Annualised volatility", nq.format_percent(metrics["volatility"], 0))
     columns[2].metric("Maximum drawdown", nq.format_percent(metrics["max_drawdown"], 0))
     columns[3].metric("Downside volatility", nq.format_percent(metrics["downside_volatility"], 0))
+    # Liquidity carries 10% of the risk score and was computed all along, but
+    # the panel showed four of its five inputs and left this one invisible.
+    turnover = nq._to_float(metrics.get("turnover"))
+    columns[4].metric("Daily turnover",
+                      nq.format_percent(turnover, 2) if np.isfinite(turnover)
+                      else "Volume not reported",
+                      help="Median daily traded value as a share of market cap. "
+                           "Thin trading is itself a risk.")
     note(f"Measured over {years} year{'s' if years > 1 else ''}. " + nq.EXPLANATIONS["risk"])
 
     with st.expander("Drawdown"):
@@ -585,7 +747,8 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 
     predictions = {h: predict(company["features"], models.get(h), h)
                    for h in nq.HORIZON_TRADING_DAYS}
-    render_profile(company, predictions)
+    technical = nq.technical_state(company["prices"])
+    render_profile(company, predictions, technical)
 
     if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
         st.warning(f"Only {company['n_quarters']} quarterly reports available. "
@@ -593,6 +756,11 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
                    f"before treating a fundamental prediction as meaningful.")
 
     prices = render_chart(company, controls["api_key"], controls["window"], controls["offline"])
+    # In live mode the profile has no cached series, so the trend is described
+    # from whatever the chart just fetched rather than not at all.
+    if not technical.get("available"):
+        technical = nq.technical_state(prices)
+    render_technical(technical, controls["window"])
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
 
@@ -646,7 +814,8 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
     for index, company_row in enumerate(universe.itertuples(), start=1):
         progress.progress(index / len(universe), text=f"Scoring {company_row.symbol}")
         record = {"ticker": company_row.symbol, "company_name": company_row.company_name,
-                  "probability": np.nan, "risk": "—", "data_quality": 0.0,
+                  "probability": np.nan, "risk": "Not measured",
+                  "trend": "Not measured", "data_quality": 0.0,
                   "eligible": False, "reason": ""}
         try:
             company = load_company(company_row.symbol, controls["api_key"], controls["offline"])
@@ -666,8 +835,10 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
 
         record.update({"probability": result["probability"], "eligible": True,
                        "data_quality": result["data_quality"]})
-        if controls["offline"] and not company["prices"].empty:
+        if not company["prices"].empty:
             metrics_by_ticker[company_row.symbol] = nq.risk_metrics(company["prices"], 1)
+            record["trend"] = nq.technical_state(company["prices"]).get("trend",
+                                                                       "Not measured")
         rows.append(record)
     progress.empty()
 
@@ -689,6 +860,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
 
     top = qualified.head(10)
     months = "6" if horizon == "6m" else "12"
+    reliability = artifact.get("reliability", {}).get("label", "Unknown")
     st.markdown(f"#### Best {len(top)} — {months} month outlook")
     st.dataframe(pd.DataFrame({
         "Rank": range(1, len(top) + 1),
@@ -696,14 +868,21 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
         "Company": top.company_name.to_numpy(),
         "Probability up": [f"{v * 100:.0f}%" for v in top.probability],
         "Risk": top.risk.to_numpy(),
-        "Reliability": artifact.get("reliability", {}).get("label", "Unknown"),
+        "Trend": top.trend.to_numpy(),
         "Data quality": [f"{v * 100:.0f}%" for v in top.data_quality],
-    }), width="stretch", hide_index=True)
+    }), width="stretch", hide_index=True, column_config={
+        "Rank": st.column_config.NumberColumn(width="small"),
+        "Ticker": st.column_config.TextColumn(width="small"),
+        "Company": st.column_config.TextColumn(width="large")})
 
-    note("<strong>How to read this table.</strong> Stocks are ranked by the "
-         "model's estimated probability of a positive return over the horizon. "
-         "Risk and reliability are shown separately because a high probability "
-         "does not automatically mean low risk.")
+    # Reliability is a property of the model, not of a row, so repeating it
+    # down every line of the table only made the columns narrower.
+    note(f"<strong>How to read this table.</strong> Stocks are ranked by the "
+         f"model's estimated probability of a positive return over the horizon. "
+         f"Model reliability for this horizon is <strong>{reliability}</strong>, "
+         f"and it applies to every row equally. Risk and trend are measured "
+         f"from price history alone, independently of the model, because a high "
+         f"probability does not automatically mean low risk.")
 
     excluded = ranked[~ranked.eligible]
     if not excluded.empty:
@@ -728,8 +907,10 @@ def main() -> None:
     controls = render_sidebar(metadata)
 
     if controls["offline"]:
-        companies = pd.DataFrame({"symbol": controls["snapshot"],
-                                  "company_name": controls["snapshot"]})
+        names = nq.company_names()
+        companies = pd.DataFrame({
+            "symbol": controls["snapshot"],
+            "company_name": [names.get(t, t) for t in controls["snapshot"]]})
         st.info(f"Cached mode — no API credits are being spent. Figures are a "
                 f"real Sectors snapshot taken on {snapshot_as_of()}, not today's "
                 f"market.")

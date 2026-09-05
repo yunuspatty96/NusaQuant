@@ -440,6 +440,26 @@ def cache_universe(universe: pd.DataFrame, base: str = "data") -> None:
         universe.to_parquet(cache_dir(base) / "universe.parquet", index=False)
 
 
+def company_names(base: str = "data") -> dict[str, str]:
+    """Ticker to registered company name, from the cached universe screen.
+
+    The screener result is already on disk, so the dashboard can show
+    "BBCA — PT Bank Central Asia Tbk." in cached mode without spending a
+    credit to learn a name it already paid for once.
+    """
+    universe = load_universe(base)
+    if universe.empty or "company_name" not in universe.columns:
+        return {}
+    return {normalise_symbol(row.symbol): str(row.company_name)
+            for row in universe.itertuples()
+            if isinstance(getattr(row, "company_name", None), str)}
+
+
+def company_name(ticker: str, base: str = "data") -> str:
+    """The registered name, or the ticker itself when it is not known."""
+    return company_names(base).get(normalise_symbol(ticker), normalise_symbol(ticker))
+
+
 def load_universe(base: str = "data") -> pd.DataFrame:
     path = cache_dir(base) / "universe.parquet"
     if not path.exists():
@@ -962,6 +982,104 @@ def risk_metrics(prices: pd.DataFrame, window_years: int = 1) -> dict[str, float
     }
 
 
+def moving_averages(prices: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
+    """Close plus one column per moving-average window, indexed by date."""
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return pd.DataFrame()
+    history = prices.sort_values("date").reset_index(drop=True)
+    frame = pd.DataFrame({"date": history["date"],
+                          "close": history["close"].astype(float)})
+    for window in windows:
+        frame[f"ma{window}"] = frame["close"].rolling(window, min_periods=window).mean()
+    return frame
+
+
+def relative_strength_index(close: pd.Series, window: int = 14) -> float:
+    """Wilder's RSI on the last bar. NaN until there is enough history."""
+    values = pd.Series(close, dtype=float).dropna()
+    if len(values) <= window:
+        return np.nan
+    delta = values.diff()
+    gain = delta.clip(lower=0).ewm(alpha=1 / window, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / window, adjust=False).mean()
+    last_gain, last_loss = float(gain.iloc[-1]), float(loss.iloc[-1])
+    if not np.isfinite(last_gain) or not np.isfinite(last_loss):
+        return np.nan
+    if last_loss == 0:
+        return 100.0 if last_gain > 0 else 50.0
+    return float(100 - 100 / (1 + last_gain / last_loss))
+
+
+def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
+    """Descriptive trend indicators from the price series alone.
+
+    These describe what the price has already done. They are NOT a forecast and
+    they are NOT part of the model — they were tested as model features on this
+    panel and did not earn a place. They sit beside the risk block, which makes
+    the same promise: descriptive, not predictive. Presenting a moving-average
+    crossover as a validated signal would be exactly the kind of claim the rest
+    of this project refuses to make.
+    """
+    empty = {"available": False, "trend": "Unknown"}
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return empty
+    history = prices.sort_values("date").reset_index(drop=True)
+    close = history["close"].astype(float)
+    if len(close) < 60:
+        return empty
+
+    last = float(close.iloc[-1])
+    ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else np.nan
+    ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else np.nan
+    peak = float(close.rolling(min(252, len(close))).max().iloc[-1])
+
+    def change(offset: int) -> float:
+        if len(close) <= offset or close.iloc[-1 - offset] <= 0:
+            return np.nan
+        return float(last / close.iloc[-1 - offset] - 1.0)
+
+    # Four states, not three. Price above its 50-day but below its 200-day, and
+    # price below its 50-day but above its 200-day, are both "neither trend" —
+    # and collapsing them into one bucket loses the only interesting thing
+    # about either. On this snapshot fifteen of nineteen tickers sit in the
+    # first case, a market that fell hard and is bouncing; calling all of them
+    # "sideways" said nothing, and calling them "recovering" says what happened.
+    short = last > ma50 if np.isfinite(ma50) else None
+    long = last > ma200 if np.isfinite(ma200) else None
+    if short is None and long is None:
+        trend = "Insufficient history"
+    elif short is None or long is None:
+        only = short if long is None else long
+        trend = "Above average" if only else "Below average"
+    elif short and long:
+        trend = "Uptrend"
+    elif short and not long:
+        trend = "Recovering"
+    elif long and not short:
+        trend = "Weakening"
+    else:
+        trend = "Downtrend"
+
+    return {
+        "available": True,
+        "last": last, "ma50": ma50, "ma200": ma200,
+        "rsi14": relative_strength_index(close),
+        "from_52w_high": (last / peak - 1.0) if peak > 0 else np.nan,
+        "return_6m": change(HORIZON_TRADING_DAYS["6m"]),
+        "return_12m": change(HORIZON_TRADING_DAYS["12m"]),
+        "trend": trend,
+    }
+
+
+def rsi_band(value: Any) -> str:
+    number = _to_float(value)
+    if not np.isfinite(number):
+        return "Unavailable"
+    if number >= 70: return "Overbought"
+    if number <= 30: return "Oversold"
+    return "Neutral"
+
+
 def _band(value: Any, low: float, high: float) -> float:
     number = _to_float(value)
     if not np.isfinite(number) or high <= low:
@@ -1183,13 +1301,35 @@ def format_multiple(value: Any) -> str:
 def format_feature(name: str, value: Any) -> str:
     spec = FEATURE_BY_NAME.get(name)
     if spec is None:
-        return "—"
+        return "n/a"
     if spec.unit == "percent":
         return format_percent(value)
     if spec.unit == "multiple":
         return format_multiple(value)
     number = _to_float(value)
-    return "—" if not np.isfinite(number) else f"{number:.2f}"
+    return "n/a" if not np.isfinite(number) else f"{number:.2f}"
+
+
+# Why a feature is absent, per feature. Every NaN in this project is deliberate
+# — a ratio is dropped when it would be economically meaningless rather than
+# quietly filled with zero — so a blank cell always has a real reason behind it
+# and the interface should say what it is instead of printing a dash.
+FEATURE_ABSENCE_REASON: dict[str, str] = {
+    "pe": "Trailing 12-month earnings are zero or negative, so a PE would be meaningless.",
+    "pb": "Book equity is zero or negative.",
+    "ps": "Trailing 12-month revenue is zero or negative.",
+    "roe": "Average equity over the period is zero or negative.",
+    "roa": "Average assets over the period are zero or negative.",
+    "net_profit_margin": "Trailing 12-month revenue is zero or negative.",
+    "debt_to_equity": "Assets or equity are missing for this period.",
+    "earnings_growth_1y": "Needs eight quarters of history; fewer are available.",
+    "revenue_growth_1y": "Needs eight quarters of history; fewer are available.",
+    "accruals": "Operating cash flow is not reported for this period.",
+}
+
+
+def feature_absence_reason(name: str) -> str:
+    return FEATURE_ABSENCE_REASON.get(name, "Not reported for this period.")
 
 
 def explain_probability(probability: float, horizon: str,
@@ -1251,6 +1391,11 @@ EXPLANATIONS = {
     "risk": ("Risk summarises historical volatility, drawdown, downside movement "
              "and liquidity. It describes what already happened and does not "
              "guarantee future risk."),
+    "technical": ("These indicators describe what the price has already done. "
+                  "They are not a forecast and they are not part of the model — "
+                  "momentum and volatility were tested as model features on this "
+                  "panel and did not earn a place. Read them the way you read the "
+                  "risk block: as context, not as a signal to act on."),
     "data_quality": ("Data quality is the share of the model's required inputs "
                      "available for this company. It is not model reliability."),
 }
