@@ -819,6 +819,11 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
         "feature_set": list(features),
         "horizons": list(nq.HORIZON_TRADING_DAYS),
         "universe_label": UNIVERSE_LABEL,
+        # The app reads this to screen its live universe. It was never written,
+        # so app.py always fell back to a hard-coded copy of the same string and
+        # would have silently disagreed with training the moment either changed.
+        "universe_filter": UNIVERSE_FILTER,
+        "universe_order_by": "-market_cap",
         "universe": sorted(dataset.ticker.unique().tolist()),
         "training_end_date": f"{dataset.observation_date.max():%Y-%m-%d}",
         "dataset_rows": int(len(dataset)),

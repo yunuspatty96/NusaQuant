@@ -825,8 +825,13 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
             "winners. It is shown for inspection of the pipeline, not as a "
             "shortlist to act on.")
 
-    size = st.slider("Universe size", 5, max(5, len(companies)),
-                     min(len(companies), 20), step=5)
+    # step=1, not 5. The universe holds 19 companies, and a step of 5 made 19
+    # unreachable: the slider stopped at 15 and quietly excluded four of them
+    # from every ranking, with nothing on screen to say so.
+    largest = max(5, len(companies))
+    size = st.slider("Universe size", 5, largest, min(len(companies), largest),
+                     step=1, help=f"How many companies to score and rank. "
+                                  f"{len(companies)} are available.")
     if controls["offline"]:
         st.caption("Cached mode — this ranking costs 0 API credits.")
     else:

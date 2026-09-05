@@ -15,6 +15,8 @@
     "12m"
   ],
   "universe_label": "NusaQuant Liquid IDX Universe (market cap > IDR 1T)",
+  "universe_filter": "market_cap > 1000000000000",
+  "universe_order_by": "-market_cap",
   "universe": [
     "AMMN",
     "ASII",
