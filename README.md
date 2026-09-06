@@ -130,27 +130,39 @@ Three views, chosen in the sidebar.
 **Single Stock Analysis** — one company end to end: profile, price history,
 momentum, trend, income statement and every metric.
 
-**Machine Learning Top Picks (Ranked)** — the universe scored and ranked
-by the machine learning model's probability, with risk and trend measured
-separately from price history alone.
+**Machine Learning Screening** — every company in the universe with both
+estimates side by side: the turbulence forecast, which passed its test, and
+the return probability, which did not. Nothing is ranked for you. The table
+opens in market-cap order, which asserts nothing, and every column sorts on
+click.
+
+**Portfolio Analysis** — enter what you hold, in lots, and the whole thing is
+measured together: value, how much it swings, its deepest fall, a projected
+range for each position and for the portfolio, and how closely the holdings
+move with one another.
+
+That last part is why the view exists. Diversification is not a property any
+individual holding has — it only appears between them, so no stock page can
+show it. On a six-stock sample the parts swing ±30.3% a year and the portfolio
+swings ±18.8%, and the two banks in it correlate at 0.56 while the least
+related pair sits at 0.10.
+
+The per-position ranges are shown next to their own sum, and the sum is
+crossed against the portfolio's own figure, because a reader shown six ranges
+will add them and the total is wrong: every holding reaching its worst case in
+the same six months is far less likely than any one of them doing so. On that
+sample, adding the parts overstates the downside by about 5% of the portfolio.
+
+This view replaced Sector Ranking, which listed the same ratios the stock page
+already showed, one sector at a time. A reader who had seen one view had seen
+the other.
 
 Every view ends with the disclaimer in a red-bordered box rather than a grey
 caption, because a caption is the first thing a reader's eye skips.
 
-**Sector Ranking (Compare Ratios)** — pick a sector or sub-sector, rank
-its companies on any ratio, and read each against the peer median. Multiples
-sort cheapest first and percentages sort most profitable first, derived from the
-metric's unit rather than listed by hand. Cached mode uses NusaQuant's own
-point-in-time ratios at zero credits; live mode screens the whole group from
-Sectors for one credit, and the view names which source is on screen rather than
-blending the two.
-
-Comparing inside a sector is the point. This panel holds banks next to miners,
-and that mismatch is why gross margin and EV/EBITDA fail the missingness gate
-outright. A group is not ranked on a ratio most of its members do not report,
-and a peer median is withheld unless at least two companies report one — with a
-single reporter the "median" is that company's own number wearing a peer-group
-label.
+Comparing inside a sector is still the point wherever ratios are read. This
+panel holds banks next to miners, and that mismatch is why gross margin and
+EV/EBITDA fail the missingness gate outright.
 
 The single-stock page runs in this order:
 
@@ -161,11 +173,27 @@ The single-stock page runs in this order:
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Trading conditions | Position in the 52-week range, volume and movement against the stock's own normal |
-| Disclaimer | Boxed in red at the foot of every view |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
-| 6-month and 12-month outlook | Probability, reliability, out-of-sample AUC, fold count |
-| Historical risk | Volatility, drawdown, downside volatility, turnover |
+| Risk Analysis | The turbulence forecast and what it scored, then measured volatility, drawdown, downside volatility and turnover |
+| Return outlook | The 6- and 12-month probabilities, under a heading that says the test found nothing |
+| Disclaimer | Boxed in red at the foot of every view |
+
+Risk sits above return, and both live in one section each. That ordering is
+deliberate: the top of a page is read as the answer, and the return estimates
+cannot carry that weight. They are demoted rather than deleted, because a test
+that found nothing is still a result and removing it would leave a reader with
+no way to judge the estimate that did find something.
+
+Risk was two things before — a descriptive panel, and a proposal for a
+separate machine learning one. Two risk sections would have been a fair thing
+for a reader to find confusing, and the second would have largely restated the
+first, since the forecast's dominant input is the trailing volatility the
+history panel already shows. So there is one: what is expected, then what has
+happened.
+
+Volatilities print as ±30.9%. A standard deviation is a distance, never a
+minus, and set bare beside a drawdown of -42.9% it reads as a return.
 
 **Candlestick needs a full bar.** Roughly half the cached companies carry open,
 high and low; the rest carry only a close. The toggle is offered either way and
@@ -324,15 +352,29 @@ calibration + 15% stability, and each of those three qualifiers is doing work:
 
 **A model with no measurable edge says so.** Below an out-of-sample ROC-AUC of
 0.55 the reliability label becomes *No measurable edge*, the probability band
-stops naming an edge it cannot demonstrate, and the Top Picks view carries a
-warning
-that its ordering is not evidence. A model cannot accumulate its way to a
+stops naming an edge it cannot demonstrate, and the screening view says
+plainly which of its two columns passed a test and which did not. A model cannot accumulate its way to a
 reassuring label on calibration and consistency alone; those describe a
 well-behaved forecast of the base rate, which is a different claim from a
 signal.
 
-**Risk is measured separately** from any probability, because a stock with a
-high probability of a positive return can still be violently volatile.
+**Risk is forecast as well as measured.** Direction of return does not clear
+the gate on this panel; volatility does. "Will this company swing more than
+the typical company over six months", scored on the same purged folds against
+the same 0.55 threshold, reaches an out-of-sample ROC-AUC of 0.699 over 8
+folds and 237 rows, and is the only model here with `has_edge` set.
+
+Two limits ship with it. Drop trailing volatility from the features and the
+score falls to 0.518, so nearly all of the skill is "volatile stays volatile"
+and the model adds little on top of one number. And the reliability label is
+still Weak, because the fold-to-fold variance is wide.
+
+Size, turnover and illiquidity are deliberately excluded despite scoring
+higher — illiquidity reaches an information coefficient of +0.22. This
+universe is the largest companies by market cap *today*, so a company that was
+small in 2023 and appears here in 2026 arrived by rising, and no test run from
+inside the panel can clear that, because every member is a survivor. Leaving
+them out costs nothing measurable: 0.666 with them, 0.666 without.
 
 ---
 

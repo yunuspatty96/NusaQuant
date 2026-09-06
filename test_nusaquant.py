@@ -334,7 +334,7 @@ try:
     _spec.loader.exec_module(appmod)
 except Exception:
     pass
-for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_SECTOR):
+for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_PORTFOLIO):
     _probe = AppTest.from_file(str(WORK / "app.py"), default_timeout=240)
     _probe.run()
     radio(_probe, "Analysis").set_value(_mode).run()
@@ -485,16 +485,87 @@ if feat:
           "Not available." in feat[0])
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
+# The previous version of this block was guarded by `if btn:`, so when the
+# button was renamed the whole thing skipped and reported nothing. That is the
+# same failure that once let a renamed mode label silently open the wrong page.
+# Find the button by asserting it exists.
 radio(at, "Analysis").set_value(appmod.MODE_PICKS).run()
-btn = [b for b in at.button if "top picks" in (b.label or "").lower()]
-if btn:
-    btn[0].click().run()
-    check("Top picks run offline", not at.exception, str(at.exception)[:300] if at.exception else "")
-    rank = [d.value for d in at.dataframe if "Probability up" in list(d.value.columns)]
-    check("ranking produced", len(rank) > 0)
-    if rank:
-        pv = [float(s.rstrip('%')) for s in rank[0]["Probability up"]]
-        check("ranked descending", pv == sorted(pv, reverse=True), str(pv))
+_screen = [b for b in at.button if "screen" in (b.label or "").lower()]
+check("screening view offers its button", _screen,
+      ", ".join(b.label or "" for b in at.button))
+if _screen:
+    _screen[0].click().run()
+    check("screening runs offline", not at.exception,
+          str(at.exception)[:300] if at.exception else "")
+    _tables = [d.value for d in at.dataframe
+               if "Bigger swings than average" in list(d.value.columns)]
+    check("screening table produced", len(_tables) > 0,
+          str([list(d.value.columns) for d in at.dataframe])[:200])
+    if _tables:
+        _table = _tables[0]
+        # Percentages held as text sort 9% above 53%, and a sortable table that
+        # sorts wrongly is worse than one that does not sort at all.
+        _numeric = ["Bigger swings than average", "Swing last year",
+                    "Data quality"]
+        check("sortable columns are numeric, not text",
+              all(str(_table[c].dtype).startswith("float") for c in _numeric
+                  if c in _table),
+              str({c: str(_table[c].dtype) for c in _numeric if c in _table}))
+        # Nothing may arrive pre-ranked by an estimate that failed its test.
+        _return_column = next((c for c in _table.columns
+                               if "positive return" in c), None)
+        if _return_column and len(_table) > 2:
+            _values = [v for v in _table[_return_column] if v == v]
+            check("the table is not pre-ranked by the return estimate",
+                  _values != sorted(_values, reverse=True), str(_values[:5]))
+
+# ── Portfolio analysis: entering, removing, and measuring together ──────
+radio(at, "Analysis").set_value(appmod.MODE_PORTFOLIO).run()
+check("portfolio view opens", not at.exception,
+      str(at.exception)[:300] if at.exception else "")
+
+_added = []
+for _want in TICKERS[:3]:
+    _options = [o for o in at.selectbox[0].options if o.startswith(_want)]
+    if not _options:
+        continue
+    at.selectbox[0].set_value(_options[0]).run()
+    at.number_input[0].set_value(10).run()
+    [b for b in at.button if b.label == "Add"][0].click().run()
+    _added.append(_want)
+check("holdings can be entered", len(_added) >= 2, str(_added))
+def _portfolio(app):
+    """AppTest's session_state maps attributes to keys, so .get is not a method."""
+    try:
+        return dict(app.session_state["portfolio"])
+    except (KeyError, AttributeError):
+        return {}
+
+check("holdings are remembered",
+      set(_portfolio(at)) == set(_added), str(_portfolio(at)))
+
+# A wrong entry has to be removable, or the only fix is reloading the page.
+_removable = [b for b in at.button if b.label == "Remove"]
+check("every holding offers a way to remove it",
+      len(_removable) == len(_added), f"{len(_removable)} for {len(_added)}")
+if _removable:
+    _removable[-1].click().run()
+    check("removing a holding takes it out",
+          len(_portfolio(at)) == len(_added) - 1, str(_portfolio(at)))
+
+_analyse = [b for b in at.button if "analyse" in (b.label or "").lower()]
+check("portfolio offers an explicit analyse button", _analyse,
+      ", ".join(b.label or "" for b in at.button))
+if _analyse:
+    _analyse[0].click().run()
+    check("portfolio analyses offline", not at.exception,
+          str(at.exception)[:300] if at.exception else "")
+    _labels = {m.label: m.value for m in at.metric}
+    check("portfolio reports a value", "Total value" in _labels, str(list(_labels)))
+    check("portfolio swing is written as plus-minus",
+          str(_labels.get("Typical swing in a year", "")).startswith("\u00b1"),
+          str(_labels.get("Typical swing in a year")))
+
 check("ENTIRE DEMO = 0 API CALLS", CALLS["n"] == 0, f"{CALLS['n']}")
 
 os.chdir(HOME)

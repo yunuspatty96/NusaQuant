@@ -1720,6 +1720,149 @@ def cone_path(cone: dict[str, Any], level: int = 50,
                          "high": cone["last"] * np.exp(width)})
 
 
+LOT_SIZE = 100                       # IDX board lot, unchanged since 2014
+MIN_PORTFOLIO_HISTORY = 60           # trading days of overlap before measuring
+
+
+def portfolio_analysis(prices: dict[str, pd.DataFrame],
+                       lots: dict[str, float]) -> dict[str, Any]:
+    """Value a portfolio and measure how it actually moved as one thing.
+
+    The reason this view exists at all is the covariance. Everything else here
+    — value, weights, sector mix — a reader could work out with a calculator.
+    How several holdings move against each other is the one thing no per-stock
+    page can show, because correlation is not a property a single stock has.
+
+    Series are aligned on dates every holding traded, so the measurement covers
+    a period the whole portfolio actually existed for. That shortens the window
+    to the youngest holding's history, which is the honest trade: measuring
+    each stock over its own longer window and combining them would produce a
+    correlation between periods that never overlapped.
+
+    The value index is anchored so its LAST point is today's value. Anchored at
+    the start instead — the obvious way to write it, and the way this was first
+    written — every range derived from it comes out centred on what the
+    portfolio was worth years ago rather than on what it is worth now.
+    """
+    blank = {"available": False}
+    held = {t: float(n) for t, n in lots.items()
+            if np.isfinite(_to_float(n)) and float(n) > 0}
+    if not held:
+        return blank
+
+    series = {}
+    for ticker, frame in prices.items():
+        if ticker not in held or frame is None or frame.empty:
+            continue
+        ordered = frame.sort_values("date")
+        column = pd.to_numeric(ordered["close"], errors="coerce")
+        column.index = pd.to_datetime(ordered["date"])
+        series[ticker] = column[~column.index.duplicated(keep="last")]
+    if not series:
+        return blank
+
+    closes = pd.DataFrame(series).dropna()
+    if len(closes) < MIN_PORTFOLIO_HISTORY:
+        return {"available": False, "reason": "overlapping price history is too short",
+                "overlap": int(len(closes))}
+
+    last = closes.iloc[-1]
+    shares = {t: held[t] * LOT_SIZE for t in closes.columns}
+    value = {t: float(last[t] * shares[t]) for t in closes.columns}
+    total = float(sum(value.values()))
+    if total <= 0:
+        return blank
+    weight = {t: value[t] / total for t in closes.columns}
+
+    returns = np.log(closes / closes.shift(1)).dropna()
+    vector = np.array([weight[t] for t in closes.columns], dtype=float)
+    combined = returns.to_numpy(dtype=float) @ vector
+    annual = math.sqrt(TRADING_DAYS_PER_YEAR)
+    volatility = float(np.std(combined, ddof=1) * annual)
+    each = {t: float(returns[t].std(ddof=1) * annual) for t in closes.columns}
+    # What the swing would be if they all moved together: the weighted average
+    # of the parts. The gap between this and the line above is the whole
+    # argument for holding more than one thing.
+    undiversified = float(sum(weight[t] * each[t] for t in closes.columns))
+
+    growth = np.exp(np.cumsum(combined))
+    index = pd.Series(growth / growth[-1] * total, index=returns.index)
+    drawdown = float((index / index.cummax() - 1.0).min())
+
+    return {
+        "available": True,
+        "tickers": list(closes.columns),
+        "from": closes.index.min(), "to": closes.index.max(),
+        "observations": int(len(closes)),
+        "lots": {t: held[t] for t in closes.columns},
+        "shares": shares, "price": {t: float(last[t]) for t in closes.columns},
+        "value": value, "total": total, "weight": weight,
+        "volatility": volatility, "each_volatility": each,
+        "undiversified_volatility": undiversified,
+        "diversification_benefit": undiversified - volatility,
+        "max_drawdown": drawdown,
+        "index": index,
+        "correlation": returns.corr(),
+        "concentration": float(sum(w ** 2 for w in weight.values())),
+        "dropped": sorted(set(held) - set(closes.columns)),
+    }
+
+
+def portfolio_projection(analysis: dict[str, Any],
+                         prices: dict[str, pd.DataFrame],
+                         horizon: int = 126) -> dict[str, Any]:
+    """The calibrated range for the portfolio, and for each position in it.
+
+    Per-position ranges are the same cone every stock page draws, applied to
+    the value of the holding rather than to one share. They are reported
+    alongside their own sum for one reason: a reader who is shown six ranges
+    will add them, and the sum is wrong. Every holding reaching its worst case
+    in the same six months is far less likely than any one of them doing so, so
+    the parts overstate the downside of the whole. Returning the sum next to
+    the portfolio's own figure is what makes that visible instead of leaving it
+    to be discovered.
+    """
+    if not analysis.get("available"):
+        return {"available": False}
+    whole = volatility_cone(pd.DataFrame({"date": analysis["index"].index,
+                                          "close": analysis["index"].to_numpy()}))
+    if not whole.get("available") or horizon not in whole.get("bands", {}):
+        return {"available": False}
+    low, high = whole["bands"][horizon][50]
+
+    positions, low_sum, high_sum, complete = [], 0.0, 0.0, True
+    for ticker in analysis["tickers"]:
+        cone = volatility_cone(prices.get(ticker, pd.DataFrame()))
+        if not cone.get("available") or horizon not in cone.get("bands", {}):
+            complete = False
+            positions.append({"ticker": ticker, "available": False})
+            continue
+        share_low, share_high = cone["bands"][horizon][50]
+        count = analysis["shares"][ticker]
+        position_low, position_high = share_low * count, share_high * count
+        low_sum += position_low
+        high_sum += position_high
+        positions.append({
+            "ticker": ticker, "available": True,
+            "low": float(position_low), "high": float(position_high),
+            "value": analysis["value"][ticker],
+            "low_change": float(share_low / cone["last"] - 1.0),
+            "high_change": float(share_high / cone["last"] - 1.0)})
+
+    return {
+        "available": True, "horizon": horizon,
+        "low": float(low), "high": float(high), "total": analysis["total"],
+        "low_change": float(low / analysis["total"] - 1.0),
+        "high_change": float(high / analysis["total"] - 1.0),
+        "positions": positions,
+        # Only meaningful when every holding produced a range; a partial sum
+        # would understate the total it is meant to warn about.
+        "sum_low": float(low_sum) if complete else np.nan,
+        "sum_high": float(high_sum) if complete else np.nan,
+        "overstatement": float(low - low_sum) if complete else np.nan,
+    }
+
+
 def support_resistance(prices: pd.DataFrame, window: int = 10,
                        levels: int = 3, tolerance: float = 0.02) -> dict[str, list]:
     """Prices the market has repeatedly turned at, above and below today.

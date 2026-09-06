@@ -77,7 +77,7 @@ python train.py
 Sekitar 5–10 menit. Tunggu sampai muncul:
 
 ```
-Exported: model_6m_xgb.joblib, model_12m_xgb.joblib + metadata.json
+Exported: model_6m_xgb.joblib, model_12m_xgb.joblib, model_risk_xgb.joblib + metadata.json
 Re-running costs NOTHING — every company is cached.
 ```
 
@@ -100,7 +100,8 @@ python train.py --screen
 ```
 
 Jalankan ulang kapan pun angka dividennya perlu disegarkan; klasifikasinya tidak
-basi. Tanpa ini, chip sektor dan mode **Sector Ranking** tidak akan muncul.
+basi. Tanpa ini, chip sektor dan rincian sektor pada Portfolio Analysis
+tidak akan muncul.
 
 **Melatih ulang tanpa kredit dan tanpa API key.** Setelah `data/cache/` terisi,
 model bisa dilatih ulang sepenuhnya dari cache — tidak ada permintaan yang
@@ -125,7 +126,9 @@ Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pasti
 
 Narasi di aplikasi ditulis untuk pembaca — investor dan peneliti dari yang sangat awam sampai mahir — bukan untuk pengembang. Istilah internal seperti nama endpoint, jumlah kredit di mode cached, atau nama fungsi tidak ditampilkan. Kalau Anda menambahkan teks baru, ikuti aturan yang sama.
 
-Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Top Picks (Ranked)**, dan **Sector Ranking (Compare Ratios)**.
+Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Screening**, dan **Portfolio Analysis**.
+
+Di Single Stock Analysis, angka utama sekarang adalah prakiraan risiko (satu-satunya model yang lolos ujinya), sedangkan probabilitas return turun ke bawah dengan label jujurnya.
 
 Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 6M, 58% untuk 12M). Itu memang disengaja — lihat bagian terakhir dokumen ini.
@@ -210,8 +213,8 @@ Itu bukan bug, dan bukan pula sesuatu yang disembunyikan. Aplikasi:
 - menyusutkan probabilitas ke arah base rate historis, sehingga sebarannya
   hanya sekitar 2 poin persen (bukan 0.66 yang terdengar meyakinkan padahal
   tidak tervalidasi),
-- dan memberi peringatan di tab **Machine Learning Top Picks** bahwa
-  urutannya bukan bukti.
+- dan pada **Machine Learning Screening** menyebut jelas kolom mana yang
+  lolos uji dan kolom mana yang tidak.
 
 **Kenapa, dan apa yang akan mengubahnya.** Target model adalah tanda dari
 *absolute return*, dan dalam 6–12 bulan tanda itu sebagian besar ditentukan

@@ -96,7 +96,7 @@ UNIVERSE_SIZE_HELP = ("How many companies to include, counting down from the "
 #: which quietly opened Top Picks instead.
 MODE_SINGLE = "Single Stock Analysis"
 MODE_PICKS = "Machine Learning Screening"
-MODE_SECTOR = "Sector Ranking (Compare Ratios)"
+MODE_PORTFOLIO = "Portfolio Analysis"
 
 #: Plotly options shared by every chart. The mode bar is left at its default,
 #: which reveals it on hover rather than parking it permanently over the plot,
@@ -578,7 +578,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
 
         st.divider()
-        mode = st.radio("Analysis", [MODE_SINGLE, MODE_PICKS, MODE_SECTOR],
+        mode = st.radio("Analysis", [MODE_SINGLE, MODE_PICKS, MODE_PORTFOLIO],
                         label_visibility="collapsed")
 
         st.divider()
@@ -1618,187 +1618,346 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
 
 
 # ══════════════════════════════════════════════════════════════════════
-# SECTOR RANKING
+# PORTFOLIO ANALYSIS
 # ══════════════════════════════════════════════════════════════════════
+#: A year of daily bars, fetched in 90-day chunks because the endpoint clamps
+#: anything wider without saying so. Five calls covers 365 days.
+PORTFOLIO_PRICE_CREDITS = 5
 
-RANKABLE = ["pe", "ps", "pbv", "pcf", "ev_ebitda", "der", "roa", "roe",
-            "gpm", "opm", "npm", "dividend_yield", "dpr"]
 
-
-def cached_sector_table(tickers: list[str]) -> pd.DataFrame:
-    """NusaQuant's own ratios for cached companies, one row each."""
-    rows = []
+def portfolio_prices(tickers: list[str], api_key: str,
+                     offline: bool) -> dict[str, pd.DataFrame]:
+    """A year of daily bars for each holding, from the snapshot or the API."""
+    out: dict[str, pd.DataFrame] = {}
     for ticker in tickers:
-        quarterly = snapshot_data(ticker, "quarterly")
-        prices = snapshot_data(ticker, "prices")
-        if quarterly.empty or prices.empty:
-            continue
-        latest = prices.sort_values("date").iloc[-1]
-        metrics = nq.features_frame(quarterly,
-                                    nq._to_float(latest.get("market_cap")),
-                                    nq._to_float(latest.get("close"))).iloc[0]
-        # The dividend figures are a screener snapshot rather than something
-        # compute_features can reconstruct, so they are merged in here.
-        rows.append({"symbol": ticker, "company_name": nq.company_name(ticker),
-                     "market_cap": nq._to_float(latest.get("market_cap")),
-                     **{m: nq._to_float(metrics.get(m)) for m in RANKABLE},
-                     **nq.company_dividends(ticker)})
-    return pd.DataFrame(rows)
+        if offline:
+            frame = snapshot_data(ticker, "prices")
+        else:
+            end = dt.date.today()
+            frame = live_prices(ticker, (end - dt.timedelta(days=400)).isoformat(),
+                                end.isoformat(), api_key)
+        if frame is not None and not frame.empty:
+            out[ticker] = frame
+    return out
 
 
-def render_sector_ranking(controls: dict) -> None:
-    section(MODE_SECTOR)
-    universe = nq.load_universe()
-    if universe.empty or "sector" not in universe.columns:
-        st.warning("Sector information is not available in this snapshot, so "
-                   "companies cannot be grouped or compared against their "
-                   "peers yet.")
+def render_holdings_editor(companies: pd.DataFrame, controls: dict) -> dict[str, float]:
+    """Enter positions in lots, and take them out again.
+
+    Lots rather than shares because that is the unit an IDX order is placed
+    in — one lot is a hundred shares, and a reader who owns "twenty lots" of
+    BBRI should not have to multiply before they can use this page.
+    """
+    holdings: dict[str, float] = st.session_state.setdefault("portfolio", {})
+
+    with st.container(border=True):
+        left, middle, right = st.columns([3, 1, 1])
+        if controls["offline"]:
+            labels = {f"{r.symbol} — {r.company_name}": r.symbol
+                      for r in companies.itertuples()}
+            choice = left.selectbox("Stock", sorted(labels),
+                                    label_visibility="collapsed")
+            ticker = labels.get(choice, "")
+        else:
+            ticker = left.text_input(
+                "Stock", placeholder="Ticker, for example BBRI",
+                label_visibility="collapsed").strip().upper()
+        lots = middle.number_input("Lots", min_value=1, value=10, step=1,
+                                   label_visibility="collapsed")
+        if right.button("Add", width="stretch"):
+            if not ticker:
+                st.warning("Enter a ticker before adding it.")
+            else:
+                holdings[ticker] = float(lots)
+                st.session_state["portfolio"] = holdings
+                st.rerun()
+        st.caption(
+            f"Enter lots. 1 lot = {nq.LOT_SIZE} shares, so 20 lots = "
+            f"{20 * nq.LOT_SIZE:,} shares. "
+            + ("In this mode you can pick from the companies already stored. "
+               "Switch to Live Sectors API to enter any listed company."
+               if controls["offline"] else
+               "Any ticker Sectors covers. Adding one the API does not know "
+               "will be reported when you press Analyse."))
+
+    if not holdings:
+        return holdings
+
+    st.markdown("**Your holdings**")
+    for ticker in list(holdings):
+        row = st.columns([3, 1, 1])
+        row[0].markdown(f"`{ticker}` {nq.company_name(ticker) or ''}")
+        row[1].markdown(f"{holdings[ticker]:,.0f} lots")
+        if row[2].button("Remove", key=f"drop_{ticker}", width="stretch"):
+            holdings.pop(ticker, None)
+            st.session_state["portfolio"] = holdings
+            st.rerun()
+    return holdings
+
+
+def render_portfolio(companies: pd.DataFrame, models: dict, controls: dict) -> None:
+    """What a set of holdings does together, which no single-stock page can say.
+
+    Sector Ranking used to live here and was removed: it listed the same ratios
+    the stock page already shows, one sector at a time, so a reader who had
+    seen one view had seen the other. This view earns its place on the
+    covariance. Diversification is not a property any individual holding has —
+    it only exists between them.
+    """
+    section(MODE_PORTFOLIO)
+    note("Enter what you hold and NusaQuant will measure the whole thing: how "
+         "much it swings, how far it could travel, and how much of its "
+         "movement your holdings share rather than offset.")
+
+    holdings = render_holdings_editor(companies, controls)
+    if not holdings:
+        st.info("Add at least two holdings to analyse."); return
+
+    per_holding = (0 if controls["offline"]
+                   else CREDITS_PER_COMPANY + PORTFOLIO_PRICE_CREDITS)
+    left, right = st.columns([1, 3])
+    pressed = left.button("Analyse portfolio", type="primary", width="stretch")
+    right.caption(
+        f"{len(holdings)} holding{'s' if len(holdings) != 1 else ''} · "
+        + ("free in this mode, nothing is fetched." if controls["offline"] else
+           f"about {len(holdings) * per_holding:,} API credits "
+           f"({per_holding} per holding)."))
+
+    if pressed:
+        st.session_state["portfolio_analysed"] = dict(holdings)
+    analysed = st.session_state.get("portfolio_analysed")
+    if not analysed:
+        st.info("Press **Analyse portfolio** when your holdings are complete.")
         return
+    if analysed != holdings:
+        # Silently redrawing stale figures under an edited portfolio is the
+        # failure mode worth guarding: the numbers look current and are not.
+        st.warning("Your holdings have changed since this was last analysed. "
+                   "The figures below describe the earlier portfolio — press "
+                   "**Analyse portfolio** again to bring them up to date.")
 
-    cached = [t for t in by_market_cap(
-        pd.DataFrame({"symbol": sorted(nq.cached_tickers())}))["symbol"]]
-    available = len(cached) if controls["offline"] else len(universe)
-
-    # The size is chosen and submitted before any grouping is offered: the
-    # sector counts depend on it, so showing them first would mean showing
-    # numbers that change the moment the slider moves.
-    with st.form("sector_universe"):
-        size = st.slider("Universe size", 5, max(5, available),
-                         min(available, max(5, available)), step=1,
-                         help=UNIVERSE_SIZE_HELP.format(total=available))
-        st.caption(UNIVERSE_SIZE_NOTE)
-        submitted = st.form_submit_button("Submit", type="primary")
-    if submitted:
-        st.session_state["sector_size"] = size
-    if "sector_size" not in st.session_state:
-        st.info("Choose a universe size and press **Submit**.")
-        return
-    size = st.session_state["sector_size"]
-
-    level_label = st.radio("Group by", ["Sector", "Sub-sector"], horizontal=True)
-    level = "sector" if level_label == "Sector" else "sub_sector"
-
-    if controls["offline"]:
-        # Only companies with collected data can be compared on NusaQuant's own
-        # ratios, so the picker counts those rather than the whole screen.
-        scope = cached[:size]
-        pool = universe[universe["symbol"].isin(scope)]
-        counts = pool[level].value_counts()
-        if counts.empty:
-            st.info("No cached company carries a classification yet.")
-            return
-        st.caption(f"{len(scope)} of {len(cached)} cached companies in scope, "
-                   f"the largest by market capitalisation.")
-        options = [f"{name} ({n})" for name, n in counts.items()]
-        chosen = st.selectbox(f"{level_label} — the number in brackets is how "
-                              f"many companies it holds within this universe",
-                              options)
-        name = chosen.rsplit(" (", 1)[0]
-        members = sorted(pool.loc[pool[level] == name, "symbol"])
-        with st.spinner(f"Scoring {len(members)} companies…"):
-            table = cached_sector_table(members)
-        source = ("ratios calculated here from each company's own filings")
-    else:
-        names = sorted(universe[level].dropna().unique())
-        name = st.selectbox(level_label, names)
-        st.caption(f"Live data: up to {size} companies in this group, "
-                   f"largest by market capitalisation first. Costs 1 API "
-                   f"credit.")
-        if not st.button("Screen this group", type="primary"):
-            st.info("Press the button to run the screen."); return
+    with st.spinner("Measuring the portfolio…"):
         try:
-            table = nq.get_sector_peers(controls["api_key"], level=level,
-                                        name=name, limit=size)
+            prices = portfolio_prices(list(analysed), controls["api_key"],
+                                      controls["offline"])
         except nq.SectorsAPIError as error:
             show_error(error); return
-        source = ("ratios published by Sectors, current as of this screen")
+        analysis = nq.portfolio_analysis(prices, analysed)
 
-    if table.empty:
-        st.info("No company came back for this group."); return
+    if not analysis.get("available"):
+        if analysis.get("reason"):
+            st.error(f"These holdings share only {analysis.get('overlap', 0)} "
+                     f"trading days of overlapping price history, which is too "
+                     f"little to measure them together. Remove the most "
+                     f"recently listed holding and try again.")
+        else:
+            st.error("No price history was found for these holdings.")
+        return
+    if analysis["dropped"]:
+        st.warning(f"No price history for {', '.join(analysis['dropped'])} — "
+                   f"left out of everything below.")
 
-    present = [m for m in RANKABLE if m in table.columns
-               and table[m].notna().sum() >= 1]
-    if not present:
-        st.info("No ratio is available for this group."); return
-
-    rankable = [m for m in present if table[m].notna().sum() >= 2]
-    if not rankable:
-        st.warning(f"Only one company in {name} has a usable ratio, so there "
-                   f"is nothing to rank it against. The figures are shown, but "
-                   f"a peer comparison needs at least two.")
-
-    metric = st.selectbox(
-        "Rank by",
-        rankable or present,
-        format_func=lambda m: (f"{nq.FEATURE_BY_NAME[m].title} — "
-                               f"{'lowest first' if nq.rank_ascending(m) else 'highest first'}"))
-
-    ordered = table.sort_values(metric, ascending=nq.rank_ascending(metric),
-                                na_position="last").reset_index(drop=True)
-    display = pd.DataFrame({
-        "Rank": range(1, len(ordered) + 1),
-        "Ticker": ordered["symbol"].to_numpy(),
-        "Company": ordered["company_name"].to_numpy(),
-        "Market cap": [nq.format_rupiah(v) for v in ordered["market_cap"]],
-    })
-    for m in present:
-        display[nq.FEATURE_BY_NAME[m].label] = [
-            nq.format_feature(m, v) for v in ordered[m]]
-    st.dataframe(display, width="stretch", hide_index=True, column_config={
-        "Rank": st.column_config.NumberColumn(width="small"),
-        "Ticker": st.column_config.TextColumn(width="small"),
-        "Company": st.column_config.TextColumn(width="medium")})
-
-    # The median is the comparison that matters: a P/E of 14 means nothing
-    # until you know the sector trades at 9.
-    # A median needs a middle. With one reporting company the "median" is just
-    # that company's own number wearing a peer-group label, which is worse than
-    # showing nothing: it invites a comparison against itself.
-    comparable = [m for m in present if ordered[m].notna().sum() >= 2]
-    if comparable:
-        st.markdown(f"##### {name} — peer median "
-                    f"({len(ordered)} companies)")
-        columns = st.columns(min(len(comparable), 6))
-        for index, m in enumerate(comparable):
-            reporting = int(ordered[m].notna().sum())
-            columns[index % len(columns)].metric(
-                nq.FEATURE_BY_NAME[m].label,
-                nq.format_feature(m, ordered[m].median(skipna=True)),
-                help=f"Median of the {reporting} companies in {name} that "
-                     f"report it.")
-
-    if len(ordered) >= 2:
-        with st.expander("Percentile against peers"):
-            percentile = pd.DataFrame({"Ticker": ordered["symbol"].to_numpy()})
-            for m in present:
-                percentile[nq.FEATURE_BY_NAME[m].label] = (
-                    nq.peer_percentile(ordered[m], m).round(0).to_numpy())
-            st.dataframe(percentile, width="stretch", hide_index=True)
-            note("100 is the best reading in the group and 0 the worst. For a "
-                 "multiple that means cheapest or least indebted; for a "
-                 "percentage, most profitable. A better ratio is not the same "
-                 "thing as a better investment.")
-
-    if any(m in present for m in ("dividend_yield", "dpr")):
-        as_of = nq.screen_as_of()
-        note(f"Dividend figures are the most recent available"
-             f"{f' as of {as_of}' if as_of else ''}. A company with no reading "
-             f"either pays no dividend or has none on record — the two "
-             f"cannot be told apart here, so it is shown as a dash rather than "
-             f"as zero.")
-
-    note(f"Figures shown are {source}."
-         f"<br><br>Comparing inside a sector is the point of this view. A "
-         f"bank's balance sheet and a miner's are not alike, so a ratio that "
-         f"looks extreme against the whole market is often ordinary beside a "
-         f"company's own competitors. Nothing here is a prediction: these are "
-         f"today's figures, ranked.")
+    render_portfolio_summary(analysis)
+    render_portfolio_projection(analysis, prices)
+    render_portfolio_risk(analysis, models, controls)
+    render_portfolio_mix(analysis)
     disclaimer()
 
 
-# ══════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════
+def render_portfolio_summary(analysis: dict) -> None:
+    columns = st.columns(3)
+    columns[0].metric("Total value", nq.format_rupiah(analysis["total"]),
+                      help=nq.TOOLTIPS["portfolio_value"])
+    columns[0].caption(f"{sum(analysis['lots'].values()):,.0f} lots across "
+                       f"{len(analysis['tickers'])} stocks")
+    columns[1].metric("Typical swing in a year",
+                      nq.format_swing(analysis["volatility"]),
+                      help=nq.TOOLTIPS["portfolio_swing"])
+    columns[1].caption("a size, never a minus")
+    columns[2].metric("Worst drop from a peak",
+                      nq.format_percent(analysis["max_drawdown"], 1),
+                      help=nq.TOOLTIPS["portfolio_drawdown"])
+    columns[2].caption("if held at these weights throughout")
+
+    saved = analysis["diversification_benefit"]
+    with st.container(border=True):
+        st.markdown("**Diversification: what mixing them saved you**")
+        note(f"Add up each holding's own swing, weighted by how much you hold, "
+             f"and you get {nq.format_swing(analysis['undiversified_volatility'])} "
+             f"a year. The portfolio actually swings "
+             f"{nq.format_swing(analysis['volatility'])}, because they do not "
+             f"all fall on the same days. That gap of "
+             f"{abs(saved) * 100:.1f} points is the whole argument for holding "
+             f"more than one thing.")
+        for label, value, colour in (
+                ("Each one alone", analysis["undiversified_volatility"], NEGATIVE),
+                ("Held together", analysis["volatility"], POSITIVE)):
+            widest = max(analysis["undiversified_volatility"],
+                         analysis["volatility"], 1e-9)
+            bar, figure = st.columns([5, 1])
+            bar.markdown(
+                f"<div style='font-size:.75rem;color:{MUTED};margin-bottom:2px'>"
+                f"{label}</div>"
+                f"<div style='background:{GRID};border-radius:4px;height:16px'>"
+                f"<div style='width:{100 * value / widest:.1f}%;background:{colour};"
+                f"height:16px;border-radius:4px'></div></div>",
+                unsafe_allow_html=True)
+            figure.markdown(f"<div style='padding-top:14px'>"
+                            f"{nq.format_swing(value)}</div>",
+                            unsafe_allow_html=True)
+    st.caption(f"Measured over {analysis['observations']:,} trading days that "
+               f"every holding traded, {analysis['from']:%b %Y} to "
+               f"{analysis['to']:%b %Y}.")
+
+
+def render_portfolio_projection(analysis: dict, prices: dict) -> None:
+    section("Projected range")
+    months = st.radio("Horizon", ["6 months", "12 months"], horizontal=True,
+                      label_visibility="collapsed")
+    horizon = 126 if months == "6 months" else 252
+    projection = nq.portfolio_projection(analysis, prices, horizon)
+    if not projection.get("available"):
+        st.info("A year of price history is needed before a range can be drawn.")
+        return
+
+    note("Built from how much each holding has actually moved over the past "
+         "year, stretched to the horizon and calibrated against what really "
+         "happened. It says how far the value might travel, not which way.")
+
+    rows = []
+    for position in projection["positions"]:
+        ticker = position["ticker"]
+        if not position.get("available"):
+            rows.append({"Stock": ticker, "Change": "—",
+                         "Your position could sit": "not enough history"})
+            continue
+        rows.append({
+            "Stock": ticker,
+            "Change": f"{position['low_change']:+.0%} to {position['high_change']:+.0%}",
+            "Your position could sit": f"{nq.format_rupiah(position['low'])} – "
+                                       f"{nq.format_rupiah(position['high'])}"})
+    if np.isfinite(projection["sum_low"]):
+        rows.append({"Stock": "Those added up",
+                     "Change": f"{projection['sum_low'] / projection['total'] - 1:+.0%} to "
+                               f"{projection['sum_high'] / projection['total'] - 1:+.0%}",
+                     "Your position could sit":
+                         f"{nq.format_rupiah(projection['sum_low'])} – "
+                         f"{nq.format_rupiah(projection['sum_high'])}"})
+    rows.append({"Stock": "Your portfolio",
+                 "Change": f"{projection['low_change']:+.0%} to "
+                           f"{projection['high_change']:+.0%}",
+                 "Your position could sit": f"{nq.format_rupiah(projection['low'])} – "
+                                            f"{nq.format_rupiah(projection['high'])}"})
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                 column_config={
+                     "Stock": st.column_config.TextColumn(width="small",
+                                                          help=nq.TOOLTIPS["ticker"]),
+                     "Change": st.column_config.TextColumn(
+                         help=nq.TOOLTIPS["position_range"]),
+                     "Your position could sit": st.column_config.TextColumn(
+                         width="large", help=nq.TOOLTIPS["position_range"])})
+
+    if np.isfinite(projection["overstatement"]):
+        note(f"<strong>The individual ranges do not add up, and should not be "
+             f"added.</strong> Every holding reaching its worst case in the "
+             f"same {months} is far less likely than any one of them doing so, "
+             f"so the row above the total overstates your downside by "
+             f"{nq.format_rupiah(abs(projection['overstatement']))} — about "
+             f"{abs(projection['overstatement']) / projection['total']:.0%} of "
+             f"the portfolio. The last row is the one to read.")
+
+
+def render_portfolio_risk(analysis: dict, models: dict, controls: dict) -> None:
+    section("Which holdings are likely to move around most")
+    artifact = models.get("risk")
+    rows = []
+    for ticker in analysis["tickers"]:
+        record = {"Stock": ticker,
+                  "Swing last year": analysis["each_volatility"][ticker] * 100,
+                  "Chance of bigger swings than average": np.nan}
+        if artifact is not None:
+            try:
+                company = load_company(ticker, controls["api_key"], controls["offline"])
+                features = with_price_features(company["features"],
+                                               company["prices"])
+                result = predict(features, artifact, "risk")
+                if result.get("available"):
+                    record["Chance of bigger swings than average"] = (
+                        result["probability"] * 100)
+            except nq.SectorsAPIError:
+                pass
+        rows.append(record)
+
+    frame = pd.DataFrame(rows).sort_values("Chance of bigger swings than average",
+                                           ascending=False, na_position="last")
+    metrics = (artifact or {}).get("validation_metrics", {})
+    auc = nq._to_float(metrics.get("roc_auc"))
+    if artifact is not None and np.isfinite(auc):
+        note(f"A machine learning model estimates the chance each holding swings "
+             f"more than the typical company over the next six months. Tested on "
+             f"{(artifact or {}).get('validation_folds', 0)} past periods it was "
+             f"right about {auc:.0%} of the time — a real edge, but a weak one, "
+             f"so read these as a rough ordering rather than a number to rely "
+             f"on. <strong>Moving around a lot is not the same as going "
+             f"down.</strong>")
+    st.dataframe(frame, width="stretch", hide_index=True, column_config={
+        "Stock": st.column_config.TextColumn(width="small",
+                                             help=nq.TOOLTIPS["ticker"]),
+        "Swing last year": st.column_config.NumberColumn(
+            format="±%.1f%%", help=nq.TOOLTIPS["swing_year"]),
+        "Chance of bigger swings than average": st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])})
+
+
+def render_portfolio_mix(analysis: dict) -> None:
+    section("Sector mix")
+    sectors: dict[str, float] = {}
+    for ticker, weight in analysis["weight"].items():
+        name = nq.company_classification(ticker).get("sector") or "Not classified"
+        sectors[name] = sectors.get(name, 0.0) + weight
+    ordered = sorted(sectors.items(), key=lambda kv: -kv[1])
+
+    figure = go.Figure()
+    for name, weight in ordered:
+        figure.add_bar(x=[weight * 100], y=["mix"], orientation="h", name=name,
+                       hovertemplate=f"{name}: %{{x:.1f}}%<extra></extra>")
+    figure.update_layout(barmode="stack", height=110, showlegend=True,
+                         margin={"l": 0, "r": 0, "t": 4, "b": 0},
+                         plot_bgcolor="white", paper_bgcolor="white",
+                         legend={"orientation": "h", "y": -0.4},
+                         xaxis={"range": [0, 100], "ticksuffix": "%",
+                                "gridcolor": GRID},
+                         yaxis={"visible": False})
+    st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
+
+    top_two = sum(w for _, w in ordered[:2])
+    largest_ticker = max(analysis["weight"], key=analysis["weight"].get)
+    note(f"The two largest sectors hold {top_two:.0%} of your money, and your "
+         f"biggest single position, {largest_ticker}, is "
+         f"{analysis['weight'][largest_ticker]:.0%} of it. Concentration is not "
+         f"automatically a mistake — it is only worth knowing before the next "
+         f"time that part of the market moves.")
+
+    with st.expander("How closely they move together"):
+        correlation = analysis["correlation"]
+        note("1.00 would mean two stocks move in perfect step; 0 means knowing "
+             "one tells you nothing about the other. Two holdings with a high "
+             "figure diversify you less than their number suggests.")
+        pairs = [(a, b, float(correlation.loc[a, b]))
+                 for i, a in enumerate(correlation.columns)
+                 for b in correlation.columns[i + 1:]]
+        if pairs:
+            closest = max(pairs, key=lambda p: p[2])
+            loosest = min(pairs, key=lambda p: p[2])
+            st.caption(f"Closest pair: {closest[0]} and {closest[1]} at "
+                       f"{closest[2]:.2f}. Loosest: {loosest[0]} and "
+                       f"{loosest[1]} at {loosest[2]:.2f}, the pair doing the "
+                       f"most work for you.")
+        st.dataframe(correlation.round(2), width="stretch",
+                     column_config={c: st.column_config.NumberColumn(
+                         format="%.2f", help=nq.TOOLTIPS["correlation"])
+                         for c in correlation.columns})
+
 
 def main() -> None:
     configure_page()
@@ -1835,8 +1994,8 @@ def main() -> None:
 
     if controls["mode"] == MODE_SINGLE:
         render_single_stock(companies, models, controls)
-    elif controls["mode"] == MODE_SECTOR:
-        render_sector_ranking(controls)
+    elif controls["mode"] == MODE_PORTFOLIO:
+        render_portfolio(companies, models, controls)
     else:
         render_screening(companies, models, controls)
     footer()
