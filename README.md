@@ -154,6 +154,7 @@ The single-stock page runs in this order:
 | Technical Indicators | RSI and MACD charted over the same window |
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
+| Trading conditions | Position in the 52-week range, volume and movement against the stock's own normal |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
 | 6-month and 12-month outlook | Probability, reliability, out-of-sample AUC, fold count |
@@ -189,6 +190,23 @@ labelled too broad to act on rather than quietly drawn narrower.
 The cone is deliberately symmetric around the last close. It says how far the
 price might travel, never which way — direction is the probability's job, and
 on this snapshot the probability does that job poorly.
+
+**Trading conditions are three readings, never one score.** Position in the
+52-week range, volume against the stock's own yearly average, and recent
+movement against the same. A composite would be read the way a fear-and-greed
+dial is read, so one was built and tested on this panel before deciding: its
+rank correlation with the following six months of return was +0.017, and the
+monotone pattern that appeared across its buckets came from SRAJ supplying a
+third of the extreme-greed observations while DSSA and BYAN contributed one
+commodity run. Split by company the pattern dissolves.
+
+Worse, the direction was backwards. A fear-and-greed dial is read
+contrarian — buy fear, sell greed — and on this panel greed preceded the
+better returns, so a reader applying the usual interpretation would have been
+doing the opposite of what the data showed. A dial carrying a number that means
+nothing is worse than no dial, because the shape is familiar enough to be
+believed. The three gauges carry no arrows and no colour for the same reason:
+being near a 52-week high is neither good nor bad.
 
 **Support and resistance are descriptive and have no horizon.** A level is
 drawn where several swing highs or lows cluster within 2% of each other, and

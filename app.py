@@ -886,6 +886,52 @@ def render_technical(technical: dict, window: str) -> None:
         note(nq.EXPLANATIONS["technical"])
 
 
+def render_trading_conditions(prices: pd.DataFrame) -> None:
+    """Three descriptive gauges. Deliberately not combined into one score.
+
+    A single dial would be read the way a fear-and-greed dial is read, and on
+    this panel that reading does not hold: bucketed by such a score the
+    apparent pattern comes from one stock supplying a third of the extreme
+    readings, with a rank correlation against the forward six-month return of
+    +0.017. Three separate readings say what is happening without implying
+    what happens next.
+    """
+    section("Trading conditions")
+    conditions = nq.trading_conditions(prices)
+    if not conditions.get("available"):
+        st.info("A year of daily prices is needed to compare this stock "
+                "against its own normal, and the snapshot does not have one "
+                "for this company.")
+        return
+
+    position = nq._to_float(conditions.get("range_position"))
+    volume = nq._to_float(conditions.get("volume_ratio"))
+    turbulence = nq._to_float(conditions.get("volatility_ratio"))
+    columns = st.columns(3)
+
+    tile(columns[0], "Position in 52-week range",
+         f"{position:.0f}%" if np.isfinite(position) else "Unavailable",
+         nq.range_band(position), nq.TOOLTIPS["range_position"])
+    tile(columns[1], "Volume vs its own normal",
+         f"{volume:.2f}x" if np.isfinite(volume) else "Unavailable",
+         nq.activity_band(volume), nq.TOOLTIPS["volume_ratio"])
+    tile(columns[2], "Movement vs its own normal",
+         f"{turbulence:.2f}x" if np.isfinite(turbulence) else "Unavailable",
+         nq.turbulence_band(turbulence), nq.TOOLTIPS["volatility_ratio"])
+
+    note(f"Measured against this stock's own past year, not against the market "
+         f"or against other companies: its 52-week low was "
+         f"{nq.format_rupiah(conditions['low_52w'], compact=False)} and its high "
+         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}. "
+         f"<br><br>These three are shown side by side rather than combined into "
+         f"a single fear-and-greed style score. Such a score was built and "
+         f"tested on this panel first: its rank correlation with the following "
+         f"six months of return was +0.017, and the pattern that did appear "
+         f"came from one company supplying a third of the extreme readings. A "
+         f"dial carrying a number that means nothing is worse than no dial, "
+         f"because the shape is familiar enough to be believed.")
+
+
 def render_income_chart(company: dict) -> None:
     """Revenue against cost against net income, quarter by quarter."""
     section("Revenue vs Cost vs Net Income")
@@ -1249,6 +1295,8 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
         company, controls["api_key"], controls["offline"])
     render_momentum_charts(prices)
     render_technical(technical, window)
+    render_trading_conditions(prices if company["prices"].empty
+                              else company["prices"])
     render_income_chart(company)
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)

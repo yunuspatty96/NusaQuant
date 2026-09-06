@@ -306,6 +306,26 @@ if _cone.get("available"):
           abs(_at252["low"] - _lo) < 1 and abs(_at252["high"] - _hi) < 1,
           f"{_at252['low']:.0f}/{_lo:.0f}")
 
+# Trading conditions are three readings, never one score. A composite would be
+# read as a fear-and-greed dial, and that reading was tested on this panel and
+# did not hold — so the absence of a combined number is asserted, not assumed.
+_tc = nq.trading_conditions(nq.load_from_cache(TICKERS[0], "prices"))
+check("trading conditions available", _tc.get("available"))
+if _tc.get("available"):
+    check("range position is a percentage of the 52-week range",
+          0 <= _tc["range_position"] <= 100, f"{_tc['range_position']:.0f}")
+    check("the 52-week low sits below the high",
+          _tc["low_52w"] < _tc["high_52w"])
+    check("ratios are measured against the stock's own year",
+          _tc["volatility_ratio"] > 0 and _tc["volume_ratio"] > 0)
+    check("no composite score is produced",
+          not any(k in _tc for k in ("score", "index", "sentiment")))
+# Their bands describe rather than judge, so none of them earns an arrow.
+check("condition bands carry no direction",
+      all(nq.band_direction(b) == 0 for b in
+          (nq.range_band(90), nq.range_band(10), nq.activity_band(2.0),
+           nq.turbulence_band(2.0), nq.turbulence_band(0.5))))
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",

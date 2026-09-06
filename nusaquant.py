@@ -1563,6 +1563,86 @@ def support_resistance(prices: pd.DataFrame, window: int = 10,
             "resistance": sorted(above[:levels], key=lambda l: l["price"])}
 
 
+def trading_conditions(prices: pd.DataFrame,
+                       recent: int = 25) -> dict[str, Any]:
+    """How this stock is trading right now against its own past year.
+
+    Three separate readings, deliberately not combined into one score. A
+    composite invites the reading that a "fear and greed" dial invites, and
+    that reading does not survive contact with this panel: bucketed by such a
+    score, the pattern that appears is driven by SRAJ contributing a third of
+    the extreme-greed observations and DSSA and BYAN supplying one commodity
+    run, while the rank correlation with the forward six-month return is
+    +0.017. Three honest gauges beat one number that means nothing.
+
+    None of these is good or bad on its own. A stock near its 52-week high may
+    be running or may be expensive, and heavy volume accompanies both panic and
+    conviction.
+    """
+    empty = {"available": False}
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return empty
+    history = prices.sort_values("date").reset_index(drop=True)
+    if len(history) < TRADING_DAYS_PER_YEAR:
+        return empty
+
+    year = history.tail(TRADING_DAYS_PER_YEAR)
+    close = year["close"].astype(float)
+    high = (year["high"] if "high" in year else year["close"]).astype(float)
+    low = (year["low"] if "low" in year else year["close"]).astype(float)
+    last = float(close.iloc[-1])
+    peak, trough = float(high.max()), float(low.min())
+
+    out = {"available": True, "last": last,
+           "high_52w": peak, "low_52w": trough,
+           "range_position": (100 * (last - trough) / (peak - trough)
+                              if peak > trough else np.nan)}
+
+    returns = np.diff(np.log(np.clip(close.to_numpy(), 1e-9, None)))
+    baseline = float(np.std(returns, ddof=1)) if returns.size > 2 else np.nan
+    latest = (float(np.std(returns[-recent:], ddof=1))
+              if returns.size > recent else np.nan)
+    out["volatility_ratio"] = (latest / baseline
+                               if np.isfinite(baseline) and baseline > 0 else np.nan)
+
+    if "volume" in year:
+        volume = year["volume"].astype(float)
+        average = float(volume.mean())
+        out["volume_ratio"] = (float(volume.tail(recent).mean()) / average
+                               if average > 0 else np.nan)
+    else:
+        out["volume_ratio"] = np.nan
+    return out
+
+
+def range_band(position: Any) -> str:
+    value = _to_float(position)
+    if not np.isfinite(value):
+        return "Unavailable"
+    if value >= 80: return "Near its 52-week high"
+    if value <= 20: return "Near its 52-week low"
+    return "Mid-range"
+
+
+def activity_band(ratio: Any, quiet: float = 0.75, busy: float = 1.5) -> str:
+    """Trading volume against this stock's own normal, not against the market."""
+    value = _to_float(ratio)
+    if not np.isfinite(value):
+        return "Unavailable"
+    if value >= busy: return "Heavier than usual"
+    if value <= quiet: return "Quieter than usual"
+    return "About normal"
+
+
+def turbulence_band(ratio: Any, calm: float = 0.8, rough: float = 1.3) -> str:
+    value = _to_float(ratio)
+    if not np.isfinite(value):
+        return "Unavailable"
+    if value >= rough: return "More volatile than usual"
+    if value <= calm: return "Calmer than usual"
+    return "About normal"
+
+
 def rsi_series(close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's RSI across the whole series, for charting."""
     values = pd.Series(close, dtype=float)
@@ -2164,6 +2244,19 @@ TOOLTIPS: dict[str, str] = {
         "stock has actually moved over the past year. It is where the price "
         "landed about half the time historically. It says how far, never which "
         "way, and it assumes the stock keeps moving as much as it has been.",
+    "range_position":
+        "Where the last close sits between the lowest and highest price of the "
+        "past 52 weeks. 0% is at the low, 100% at the high. Neither end is good "
+        "or bad on its own: a stock at its high may be running, or expensive.",
+    "volume_ratio":
+        "Average trading volume over the past month against this stock's own "
+        "average for the year. Above 1.0 means more shares are changing hands "
+        "than usual. Heavy trading accompanies panic and conviction alike, so "
+        "it says attention, not direction.",
+    "volatility_ratio":
+        "How much the price has moved over the past month against its own "
+        "average for the year. Above 1.0 means it is swinging harder than it "
+        "normally does.",
     "support_resistance":
         "Prices this stock has repeatedly turned at before: a level is drawn "
         "where several swing highs or lows cluster together, and the more "
