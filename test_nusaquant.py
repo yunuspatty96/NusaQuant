@@ -432,12 +432,30 @@ at.session_state["ticker"] = TICKERS[0]; at.session_state["analysed"] = TICKERS[
 at.run()
 check("single stock renders", not at.exception, str(at.exception)[:300] if at.exception else "")
 labels = {m.label: m.value for m in at.metric}
-_p6 = "6M probability of positive return"
-_p12 = "12M probability of positive return"
-check("6M probability shown", labels.get(_p6, "—") != "—", str(labels.get(_p6)))
-check("12M probability shown", labels.get(_p12, "—") != "—")
+_risk = "Chance of bigger swings than average"
+_swing = "Typical swing in a year"
+check("risk forecast shown", labels.get(_risk, "Not available") != "Not available",
+      str(labels.get(_risk)))
+check("risk forecast leads the page", _risk in labels and _swing in labels)
 check("reliability shown", "Machine learning model reliability" in labels)
-check("risk shown", "Annualised volatility" in labels)
+check("historical risk still shown", "Worst drop from a peak" in labels)
+check("forecast reliability shown", "Forecast reliability" in labels)
+
+# A volatility is a distance and can never be a minus. Printed bare next to a
+# drawdown it reads as a return, which is the confusion the sign exists to end.
+_swings = [v for k, v in labels.items()
+           if k in (_swing, "Swing on down days") and v not in ("—", "Not available")]
+check("volatilities are written as plus-minus",
+      _swings and all(v.startswith("±") for v in _swings), str(_swings))
+check("the drop is not written as plus-minus",
+      not str(labels.get("Worst drop from a peak", "")).startswith("±"),
+      str(labels.get("Worst drop from a peak")))
+
+# The return estimates are demoted, not deleted: a test that found nothing is
+# still a result, and removing it would leave nothing to judge the rest by.
+check("return estimates kept on the page",
+      "Probability of positive return" in labels,
+      ", ".join(sorted(labels)[:6]))
 # The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
 # onto a canvas whose cells clip long text, and this table is read rather than
 # sorted, so the wrapping matters more than the interactivity.

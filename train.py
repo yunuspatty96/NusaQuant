@@ -325,9 +325,15 @@ def build_dataset(quarterly: dict, prices: dict) -> pd.DataFrame:
     frames = []
     for ticker in quarterly:
         observations = nq.build_observations(ticker, quarterly[ticker], prices[ticker])
-        if not observations.empty:
-            frames.append(nq.add_targets(observations, prices[ticker]))
-    return nq.build_dataset(frames)
+        if observations.empty:
+            continue
+        observations = nq.add_targets(observations, prices[ticker])
+        observations = nq.add_price_features(observations, prices[ticker])
+        observations = nq.add_risk_target(observations, prices[ticker])
+        frames.append(observations)
+    # The risk label compares each stock against the others in its own quarter,
+    # so it can only be set once every ticker is in one frame.
+    return nq.add_risk_labels(nq.build_dataset(frames))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -637,7 +643,8 @@ def evaluate_candidate(dataset, features, horizon, name, policy="all") -> dict:
     return result
 
 
-def choose_model(dataset, features, horizon, baseline: dict) -> dict:
+def choose_model(dataset, features, horizon, baseline: dict,
+                 policies=None) -> dict:
     """Measure every candidate on the same purged folds and keep the best.
 
     Ranked on out-of-sample log loss — a proper scoring rule, so it cannot be
@@ -664,7 +671,7 @@ def choose_model(dataset, features, horizon, baseline: dict) -> dict:
     baseline_loss = nq._to_float((baseline.get("metrics") or {}).get("log_loss"))
     scored = []
     for name in MODEL_CANDIDATES:
-        for policy in FEATURE_POLICIES:
+        for policy in (policies or FEATURE_POLICIES):
             result = evaluate_candidate(dataset, features, horizon, name, policy)
             if not result.get("available"):
                 continue
@@ -719,6 +726,93 @@ def _cap_shrinkage(chosen: dict, baseline: dict, cap: float) -> dict:
                    "shrinkage_capped": True})
     chosen["reliability"] = nq.reliability(capped, baseline.get("metrics"))
     return chosen
+
+
+def train_risk_model(dataset: pd.DataFrame) -> str | None:
+    """Train and export the six-month volatility model.
+
+    Same folds, same purging, same candidate field, same gate. Only the
+    question is different, and the question is the whole reason this exists:
+    direction of return does not clear MIN_EDGE_AUC on this panel and
+    volatility does. Nothing here is tuned to make that happen — swapping the
+    target is the entire change.
+    """
+    features = [f for f in nq.RISK_FEATURE_NAMES if f in dataset.columns]
+    if "target_risk" not in dataset.columns or len(features) < 2:
+        print()
+        print("Risk model: not enough price history to build the target.")
+        return None
+    labelled = dataset.dropna(subset=["target_risk"])
+    if labelled.empty:
+        print()
+        print("Risk model: no quarter was wide enough to rank. Skipped.")
+        return None
+
+    print()
+    print("Risk model — will this stock swing more than the typical company?")
+    print(f"  target: realised volatility over the next "
+          f"{nq.RISK_HORIZON_DAYS} trading days, ranked within each quarter")
+    print(f"  labelled rows: {len(labelled)} across "
+          f"{labelled.observation_date.nunique()} quarters")
+
+    # Screening needs a forward RETURN to correlate against and there is none
+    # for this target, so the screen would keep everything anyway. Ask for the
+    # one policy that means something here rather than scoring four duplicates.
+    baseline = walk_forward(dataset, features, "risk")
+    chosen = choose_model(dataset, features, "risk", baseline,
+                          policies={"all": None})
+    if not chosen.get("available"):
+        print(f"  {chosen.get('reason')}")
+        return None
+
+    metrics, reliability = chosen["metrics"], chosen["reliability"]
+    print(f"  {len(chosen['folds'])} purged folds, {metrics['n']} out-of-sample rows")
+    for row in chosen["leaderboard"]:
+        loss = row["log_loss"]
+        shown = "   —  " if loss is None else f"{loss:.4f}"
+        print(f"        {row['model']:<20} log-loss {shown} · "
+              f"AUC {row['roc_auc']:.3f}")
+    print(f"    -> {chosen['name']} selected, shrinkage "
+          f"{chosen['shrinkage_weight']:.2f}")
+    print(f"       AUC {metrics['roc_auc']:.3f} · reliability "
+          f"{reliability['label']} ({reliability['score']:.1f}/100)")
+    if reliability["has_edge"]:
+        print(f"       Measurable edge: out-of-sample ROC-AUC clears "
+              f"{nq.MIN_EDGE_AUC:.2f}. This is the one model in the project "
+              f"that does.")
+    else:
+        print("       No measurable edge at the risk horizon either.")
+
+    estimator = build_model(chosen["name"], weight=chosen["shrinkage_weight"])
+    estimator.fit(labelled[features], labelled["target_risk"].astype(int))
+
+    import joblib
+    artifact = {
+        "pipeline": estimator,
+        "feature_names": list(features),
+        "horizon": "risk",
+        "question": "more volatile than the median company over six months",
+        "model_name": chosen["name"],
+        "shrinkage_weight": float(chosen["shrinkage_weight"]),
+        "shrinkage_capped": bool(chosen.get("shrinkage_capped", False)),
+        "validation_metrics": metrics,
+        "validation_metrics_unshrunk": chosen["metrics_raw"],
+        "fold_metrics": chosen["folds"].to_dict("records"),
+        "leaderboard": chosen["leaderboard"],
+        "reliability": reliability,
+        "has_edge": bool(reliability["has_edge"]),
+        "beats_baseline": bool(chosen["beats_baseline"]),
+        "baseline_metrics": baseline.get("metrics", {}),
+        "validation_folds": int(len(chosen["folds"])),
+        "feature_importance": feature_importance(estimator, features),
+        "training_end_date": f"{labelled.observation_date.max():%Y-%m-%d}",
+        "n_training_rows": int(len(labelled)),
+        "n_training_tickers": int(labelled.ticker.nunique()),
+        "nusaquant_version": nq.__version__,
+    }
+    path = MODELS_DIR / "model_risk_xgb.joblib"
+    joblib.dump(artifact, path)
+    return path.name
 
 
 def feature_importance(estimator, features) -> list[dict]:
@@ -998,6 +1092,10 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
         path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
         joblib.dump(artifact, path)
         exported.append(path.name)
+
+    risk = train_risk_model(dataset)
+    if risk is not None:
+        exported.append(risk)
 
     if not exported:
         print("\nNo models could be trained. Stopping.")

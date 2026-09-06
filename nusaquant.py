@@ -1243,6 +1243,140 @@ def add_targets(observations: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFram
     return result
 
 
+# ══════════════════════════════════════════════════════════════════════
+# RISK: THE QUESTION THIS PANEL CAN ACTUALLY ANSWER
+# ══════════════════════════════════════════════════════════════════════
+# Direction of return, over six to twelve months, is close to unpredictable
+# from fundamentals — on this panel it scores an out-of-sample ROC-AUC of 0.515
+# against a 0.55 gate, and every intervention tried moved it by less than the
+# measurement error. That is not a defect in the data. It is what the question
+# is like.
+#
+# Volatility is a different question. It is persistent: a company whose price
+# moved a lot last quarter tends to keep moving a lot, in a way a company whose
+# price ROSE last quarter does not tend to keep rising. Measured on the same
+# purged folds with the same gate, "will this stock swing more than the typical
+# company" scores 0.70. That clears the gate, and it clears it identically
+# under all four model candidates, which is what a real signal looks like as
+# opposed to one configuration getting lucky.
+#
+# Two honest limits are recorded here rather than in a slide. Drop trailing
+# volatility from the feature set and the score collapses to 0.518: essentially
+# all of the skill is "volatile stays volatile", and the model adds little on
+# top of the one number. And the reliability score still lands on Weak, because
+# the fold-to-fold variance is large. It is a real edge and a small one.
+
+RISK_HORIZON_DAYS = 126              # six months, in trading days
+MIN_RISK_CROSS_SECTION = 8           # companies needed before a quarter can rank
+
+#: Deliberately excludes size, turnover and illiquidity. Those score higher —
+#: illiquidity reaches an IC of +0.22 — but this universe is the largest
+#: companies by market cap TODAY, so a company that was small in 2023 and
+#: appears here in 2026 arrived by rising. "Small predicts rising" would be the
+#: selection rule read backwards, and no test run from inside the panel can
+#: clear it, because every member is a survivor. Leaving them out costs
+#: nothing measurable: 0.666 with them, 0.666 without.
+RISK_FEATURE_NAMES: list[str] = ["vol_3m", "der", "dist_52w_high", "reversal_1m"]
+
+
+def price_features(prices: pd.DataFrame, position: int) -> dict[str, float]:
+    """Price-derived features as they stood at one bar, and no later.
+
+    ``position`` indexes the ticker's own price series, so everything here is
+    computed from bars at or before the observation date. Slicing by position
+    rather than by date is what makes that guarantee mechanical instead of a
+    promise: there is no expression in this function that can reach forward.
+    """
+    blank = {name: np.nan for name in ("vol_3m", "dist_52w_high", "reversal_1m")}
+    if prices is None or prices.empty or not np.isfinite(position) or position < 30:
+        return blank
+    history = prices.sort_values("date").reset_index(drop=True)
+    close = history["close"].to_numpy(dtype=float)[:int(position) + 1]
+    if len(close) < 30 or not np.isfinite(close[-1]) or close[-1] <= 0:
+        return blank
+    returns = np.diff(np.log(np.clip(close, 1e-9, None)))
+    returns = returns[np.isfinite(returns)]
+    year = close[-TRADING_DAYS_PER_YEAR:]
+    peak = float(np.max(year)) if len(year) else np.nan
+    return {
+        "vol_3m": (float(np.std(returns[-63:], ddof=1)
+                         * math.sqrt(TRADING_DAYS_PER_YEAR))
+                   if len(returns) >= 63 else np.nan),
+        "dist_52w_high": (close[-1] / peak - 1.0
+                          if np.isfinite(peak) and peak > 0 else np.nan),
+        "reversal_1m": (close[-1] / close[-22] - 1.0
+                        if len(close) >= 22 and close[-22] > 0 else np.nan),
+    }
+
+
+def add_price_features(observations: pd.DataFrame,
+                       prices: pd.DataFrame) -> pd.DataFrame:
+    """Attach the price-derived features to every observation."""
+    if observations.empty:
+        return observations
+    result = observations.copy()
+    rows = [price_features(prices, position)
+            for position in result["price_index"].to_numpy(dtype=int)]
+    for name in ("vol_3m", "dist_52w_high", "reversal_1m"):
+        result[name] = [row.get(name, np.nan) for row in rows]
+    return result
+
+
+def add_risk_target(observations: pd.DataFrame,
+                    prices: pd.DataFrame) -> pd.DataFrame:
+    """Realised volatility over the six months AFTER each observation.
+
+    This is the thing being predicted, so unlike every other column it reads
+    forward on purpose. It stays NaN until the window has fully closed; a
+    partially observed window would quietly report a calmer number than the
+    period actually delivered.
+    """
+    if observations.empty or prices is None or prices.empty:
+        return observations
+    history = prices.sort_values("date").reset_index(drop=True)
+    close = history["close"].to_numpy(dtype=float)
+    total = len(close)
+    result = observations.copy()
+
+    forward = []
+    for position in result["price_index"].to_numpy(dtype=int):
+        end = position + RISK_HORIZON_DAYS
+        if end >= total:
+            forward.append(np.nan); continue
+        window = close[position:end + 1]
+        returns = np.diff(np.log(np.clip(window, 1e-9, None)))
+        returns = returns[np.isfinite(returns)]
+        forward.append(float(np.std(returns, ddof=1)
+                             * math.sqrt(TRADING_DAYS_PER_YEAR))
+                       if len(returns) > 2 else np.nan)
+    result["forward_volatility"] = forward
+    return result
+
+
+def add_risk_labels(dataset: pd.DataFrame) -> pd.DataFrame:
+    """Label each row against its own quarter, never against the whole panel.
+
+    The comparison is cross-sectional for the same reason the return target
+    should have been: measured in absolute terms, "was this volatile" is mostly
+    a statement about which quarter it was. In a calm quarter every stock looks
+    calm. Ranking inside the quarter removes the market-wide regime and leaves
+    the part that is about the company.
+    """
+    if dataset.empty or "forward_volatility" not in dataset.columns:
+        return dataset
+    result = dataset.copy()
+    grouped = result.groupby("observation_date")["forward_volatility"]
+    median, count = grouped.transform("median"), grouped.transform("count")
+    result["target_risk"] = np.where(
+        result.forward_volatility.notna() & (count >= MIN_RISK_CROSS_SECTION),
+        (result.forward_volatility > median).astype(float), np.nan)
+    # walk_forward_folds purges on when a target resolves, so it needs the date
+    # this one did. Six months of trading days after the observation.
+    result["target_available_risk"] = (result["observation_date"]
+                                       + pd.Timedelta(days=int(RISK_HORIZON_DAYS * 7 / 5)))
+    return result
+
+
 def build_dataset(frames) -> pd.DataFrame:
     """Concatenate, de-duplicate and clean the per-ticker observation frames."""
     frames = [f for f in frames if f is not None and not f.empty]
@@ -2098,6 +2232,21 @@ def probability_band(probability: float, has_edge: bool = True) -> str:
 # FORMATTING AND EXPLANATIONS (deterministic templates — no LLM)
 # ══════════════════════════════════════════════════════════════════════
 
+def format_swing(value: Any, decimals: int = 1) -> str:
+    """A volatility, written so it cannot be mistaken for a gain or a loss.
+
+    Volatility is a distance, not a direction: it is a standard deviation, so
+    it is never negative and it describes movement both ways at once. Printed
+    as a bare "32.7%" beside a drawdown of "-42.9%" it reads as a return, and
+    a reader who adds the two has been misled by the typography rather than by
+    the number. The plus-minus sign is the whole fix.
+    """
+    number = _to_float(value)
+    if not np.isfinite(number):
+        return "—"
+    return f"±{abs(number) * 100:.{decimals}f}%"
+
+
 def format_rupiah(value: Any, compact: bool = True) -> str:
     number = _to_float(value)
     if not np.isfinite(number):
@@ -2236,6 +2385,53 @@ def explain_reliability(label: str, horizon: str) -> str:
 #: the rest of the prose because a reader deciding whether to trust a number
 #: needs to know what it measures, and a label alone rarely says.
 TOOLTIPS: dict[str, str] = {
+    # — risk —
+    "risk_probability":
+        "The machine learning model's estimate that this company's price will "
+        "swing more over the next six months than the typical company in this "
+        "universe. Above 50% means wider swings than average are expected; "
+        "below 50% means calmer. It says nothing about direction — a stock "
+        "can be turbulent on the way up.",
+    "risk_validated":
+        "How the risk forecast scored when it was tested on periods it had not "
+        "seen. Each past quarter was predicted using only what was known "
+        "before it, and the score is the share of pairs it ordered correctly: "
+        "0.50 would be a coin toss, 1.00 would be perfect.",
+    "swing_year":
+        "How much this price has moved, up or down, over the period shown, "
+        "stated as an annual figure. It is a size and never a minus: 30% means "
+        "roughly 30% of movement in either direction in a typical year.",
+    "risk_forecast_reliability":
+        "How much weight the testing supports putting on the risk forecast. "
+        "Weak means the edge is real but small, and the accuracy varied a lot "
+        "from period to period.",
+    # — portfolio —
+    "portfolio_value":
+        "What your holdings are worth at the latest prices shown on this page.",
+    "portfolio_swing":
+        "How much the whole portfolio has moved, up or down, in a typical "
+        "year. It is smaller than the average of the individual stocks "
+        "whenever they do not all move together.",
+    "portfolio_drawdown":
+        "The deepest fall from a previous high this combination would have "
+        "suffered, assuming you had held these same proportions throughout. "
+        "You almost certainly did not, so read it as a property of the mix "
+        "rather than as your own history.",
+    "diversification":
+        "What holding several stocks saved you. Add up each stock's own "
+        "movement, weighted by how much you hold, and compare it with how the "
+        "portfolio actually moved. The gap is the benefit of them not all "
+        "falling on the same days.",
+    "correlation":
+        "How closely two stocks move together. 1.00 would be perfect lockstep, "
+        "0 means knowing one tells you nothing about the other. Two holdings "
+        "with a high figure diversify you less than their number suggests.",
+    "position_range":
+        "Where this position's value could sit at the horizon, on the same "
+        "calibrated range used elsewhere in NusaQuant. These do not add up "
+        "across holdings: every stock hitting its worst case in the same six "
+        "months is far less likely than any one of them doing so.",
+
     # — profile —
     "latest_close":
         "The most recent closing price in the data being shown. Check the date "

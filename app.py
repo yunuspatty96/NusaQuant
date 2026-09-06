@@ -120,12 +120,20 @@ CREDITS_PER_COMPANY = QUARTERS_FOR_INFERENCE + 1
 # MODELS
 # ══════════════════════════════════════════════════════════════════════
 
+#: Three models now, and the third is the only one with a measurable edge.
+#: "risk" is keyed like a horizon because everything downstream — predict(),
+#: the reliability panels, the artifact layout — already speaks that language.
+MODEL_FILES: dict[str, str] = {"6m": "model_6m_xgb.joblib",
+                               "12m": "model_12m_xgb.joblib",
+                               "risk": "model_risk_xgb.joblib"}
+
+
 @st.cache_resource(show_spinner=False)
 def load_models() -> tuple[dict[str, Any], dict[str, Any]]:
-    """Load the two artifacts once per session, not once per rerun."""
+    """Load the exported artifacts once per session, not once per rerun."""
     models: dict[str, Any] = {}
-    for horizon in nq.HORIZON_TRADING_DAYS:
-        path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
+    for horizon, filename in MODEL_FILES.items():
+        path = MODELS_DIR / filename
         if path.exists():
             try:
                 models[horizon] = joblib.load(path)
@@ -151,8 +159,8 @@ def diagnose_models() -> dict[str, Any]:
               "files": [], "loaded": [], "errors": []}
     if MODELS_DIR.exists():
         report["files"] = sorted(p.name for p in MODELS_DIR.iterdir() if p.is_file())
-    for horizon in nq.HORIZON_TRADING_DAYS:
-        path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
+    for filename in MODEL_FILES.values():
+        path = MODELS_DIR / filename
         if not path.exists():
             continue
         try:
@@ -176,7 +184,9 @@ def predict(features: pd.DataFrame, artifact: dict[str, Any] | None,
     A confident-looking probability built on missing data is worse than none.
     """
     if not artifact:
-        return {"available": False, "reason": f"No trained machine learning model for the {horizon} horizon."}
+        missing = ("No trained risk model was found." if horizon == "risk"
+                   else f"No trained machine learning model for the {horizon} horizon.")
+        return {"available": False, "reason": missing}
     model_features = list(artifact.get("feature_names", []))
     missing_columns = [c for c in model_features if c not in features.columns]
     if missing_columns:
@@ -288,6 +298,26 @@ def _with_dividends(features: pd.DataFrame, ticker: str) -> pd.DataFrame:
         if metric in features.columns:
             features.loc[features.index[0], metric] = value
     return features
+
+
+def with_price_features(features: pd.DataFrame,
+                        prices: pd.DataFrame) -> pd.DataFrame:
+    """Add the price-derived inputs the risk model reads.
+
+    Computed at the last bar of whatever series is on screen, through the same
+    nq.price_features the training script called at every historical
+    observation — so "volatility" cannot quietly mean a 63-day window in
+    training and a 90-day one here.
+    """
+    frame = features.copy()
+    if prices is None or prices.empty:
+        for name in ("vol_3m", "dist_52w_high", "reversal_1m"):
+            frame[name] = np.nan
+        return frame
+    ordered = prices.sort_values("date").reset_index(drop=True)
+    for name, value in nq.price_features(ordered, len(ordered) - 1).items():
+        frame[name] = value
+    return frame
 
 
 def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
@@ -567,7 +597,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 # SINGLE STOCK
 # ══════════════════════════════════════════════════════════════════════
 
-def render_profile(company: dict, predictions: dict) -> None:
+def render_profile(company: dict, risk: dict, volatility: float) -> None:
     ticker, name = company["ticker"], company["name"]
     heading = ticker if name == ticker else f"{ticker} <span>— {name}</span>"
     st.markdown(f"<div class='nq-name'>{heading}</div>", unsafe_allow_html=True)
@@ -580,26 +610,31 @@ def render_profile(company: dict, predictions: dict) -> None:
         st.markdown("".join(f"<span class='nq-chip'>{c}</span>" for c in chips),
                     unsafe_allow_html=True)
 
-    columns = st.columns(4)
+    columns = st.columns(3)
     columns[0].metric("Latest close",
                       nq.format_rupiah(overview.get("last_close_price"), compact=False),
                       help=nq.TOOLTIPS["latest_close"])
     columns[1].metric("Market cap", nq.format_rupiah(overview.get("market_cap")),
                       help=nq.TOOLTIPS["market_cap"])
-    for column, horizon in ((columns[2], "6m"), (columns[3], "12m")):
-        result = predictions.get(horizon, {})
-        # Spelled out rather than left as "6M probability": the horizon alone
-        # never said probability of what, and the answer is the one thing a
-        # reader must not guess at.
-        label = f"{'6' if horizon == '6m' else '12'}M probability of positive return"
-        if result.get("available"):
-            column.metric(label, f"{result['probability'] * 100:.0f}%",
-                          help=nq.TOOLTIPS["probability"])
-        else:
-            # Never a bare dash: an unavailable probability has a cause, and
-            # the cause is more useful than the punctuation.
-            column.metric(label, "Not available",
-                          help=result.get("reason", "Prediction unavailable."))
+    # The two return probabilities used to sit here, at the top of the page,
+    # in the position a reader treats as the answer. They were never able to
+    # carry that: neither horizon beat chance out of sample. What replaced them
+    # is the one estimate that did. The return figures still appear, lower
+    # down, with the label the testing supports.
+    #
+    # Only the forecast is repeated from the Risk Analysis section, and only
+    # because the top of a page is where a reader looks first. The measured
+    # volatility is NOT repeated here: two identical numbers in two places is
+    # how a reader ends up wondering which one to believe.
+    if risk.get("available"):
+        columns[2].metric("Chance of bigger swings than average",
+                          f"{risk['probability'] * 100:.0f}%",
+                          help=nq.TOOLTIPS["risk_probability"])
+    else:
+        # Never a bare dash: an unavailable estimate has a cause, and the cause
+        # is more useful than the punctuation.
+        columns[2].metric("Chance of bigger swings than average", "Not available",
+                          help=risk.get("reason", "Risk forecast unavailable."))
 
     period = company["latest_period"]
     period_text = ("not reported" if pd.isna(period)
@@ -1146,6 +1181,20 @@ def render_features(company: dict, model_features: list[str]) -> None:
          f"figures are not available here.")
 
 
+def render_return_intro() -> None:
+    """Say why the return figures are down here rather than at the top."""
+    section("Return outlook")
+    note("NusaQuant tested whether these fundamentals could predict which way "
+         "a share price would go over six and twelve months. <strong>They could "
+         "not.</strong> Across the periods tested, the estimates below ordered "
+         "risers above fallers no better than a coin toss would have. "
+         "<br><br>They are kept on the page rather than removed, because a test "
+         "that found nothing is still a result, and hiding it would leave you "
+         "with no way to judge the ones that did find something. Read them as "
+         "the historical frequency of a rise in this market, not as a view on "
+         "this company.")
+
+
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
     months = "6" if horizon == "6m" else "12"
     section(f"{months}-month outlook")
@@ -1211,33 +1260,102 @@ def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None
     # output for anyone auditing the repository.
 
 
-def render_risk(prices: pd.DataFrame, window: str) -> None:
-    section("Historical risk")
+def risk_band(probability: float) -> str:
+    """Words for the forecast, pitched at what a weak edge can support."""
+    if not np.isfinite(probability):
+        return "Unavailable"
+    if probability >= 0.65: return "Wider swings than most"
+    if probability >= 0.55: return "Somewhat wider than most"
+    if probability > 0.45:  return "About average"
+    if probability > 0.35:  return "Somewhat calmer than most"
+    return "Calmer than most"
+
+
+def render_risk_analysis(prices: pd.DataFrame, window: str,
+                         risk: dict, artifact: dict | None) -> None:
+    """One section for risk, forecast first and history underneath.
+
+    These used to be two things in two places: a descriptive "Historical risk"
+    panel and, briefly, a proposal for a separate machine learning risk panel.
+    Two risk sections would have been a reasonable thing for a reader to find
+    confusing, and the second one would have been mostly a re-presentation of
+    the first — the forecast's dominant input is trailing volatility, which the
+    history panel already shows. So they are one section: what is expected,
+    then what has happened.
+    """
+    section("Risk Analysis")
     if prices.empty:
         st.info("Risk cannot be measured without price history."); return
+
+    reliability = (artifact or {}).get("reliability", {})
+    metrics = (artifact or {}).get("validation_metrics", {})
+    has_edge = bool((artifact or {}).get("has_edge", False))
+
+    if risk.get("available"):
+        probability = risk["probability"]
+        st.markdown(f"**{risk_band(probability)}** · "
+                    f"{probability * 100:.0f}% chance of bigger swings than average")
+        probability_bar(probability)
+        note("A machine learning model estimates how likely this company is to "
+             "move around more than the typical company in this universe over "
+             "the next six months. <strong>Moving around a lot is not the same "
+             "as going down</strong> — a stock can be turbulent on the way up, "
+             "and this figure says nothing about direction.")
+
+        columns = st.columns(3)
+        auc = nq._to_float(metrics.get("roc_auc"))
+        columns[0].metric("Tested accuracy",
+                          f"{auc:.0%}" if np.isfinite(auc) else "—",
+                          help=nq.TOOLTIPS["risk_validated"])
+        columns[1].metric("Periods tested",
+                          (artifact or {}).get("validation_folds", "—"),
+                          help=nq.TOOLTIPS["folds"])
+        columns[2].metric("Forecast reliability",
+                          reliability.get("label", "Unknown"),
+                          help=nq.TOOLTIPS["risk_forecast_reliability"])
+
+        if has_edge:
+            note("This is the one forecast in NusaQuant that passed its test. "
+                 "Checked on periods it had never seen, it ordered calmer "
+                 "companies below more turbulent ones better than chance would. "
+                 "It is still a weak edge: the accuracy varied a good deal from "
+                 "period to period, and most of what it knows comes from the "
+                 "simple fact that a company that has been moving around lately "
+                 "tends to keep moving around. Read it as a rough ordering.")
+        else:
+            st.warning("This forecast did not beat chance when it was tested on "
+                       "periods it had not seen. The figures below, which "
+                       "describe what has already happened, are the more "
+                       "reliable reading.")
+    elif artifact:
+        st.info(risk.get("reason", "The risk forecast is unavailable for this company."))
+
+    st.markdown("**What has happened so far**")
     years = PRICE_WINDOWS[window]
-    metrics = nq.risk_metrics(prices, years)
-    risk = nq.risk_score(metrics)
+    measures = nq.risk_metrics(prices, years)
+    score = nq.risk_score(measures)
 
     columns = st.columns(5)
-    columns[0].metric("Risk", risk["band"], help=nq.TOOLTIPS["risk_band"])
-    columns[1].metric("Annualised volatility",
-                      nq.format_percent(metrics["volatility"], 0),
-                      help=nq.TOOLTIPS["volatility"])
-    columns[2].metric("Maximum drawdown",
-                      nq.format_percent(metrics["max_drawdown"], 0),
+    columns[0].metric("Risk", score["band"], help=nq.TOOLTIPS["risk_band"])
+    columns[1].metric("Typical swing in a year",
+                      nq.format_swing(measures["volatility"]),
+                      help=nq.TOOLTIPS["swing_year"])
+    columns[2].metric("Worst drop from a peak",
+                      nq.format_percent(measures["max_drawdown"], 0),
                       help=nq.TOOLTIPS["max_drawdown"])
-    columns[3].metric("Downside volatility",
-                      nq.format_percent(metrics["downside_volatility"], 0),
+    columns[3].metric("Swing on down days",
+                      nq.format_swing(measures["downside_volatility"]),
                       help=nq.TOOLTIPS["downside_volatility"])
-    # Liquidity carries 10% of the risk score and was computed all along, but
-    # the panel showed four of its five inputs and left this one invisible.
-    turnover = nq._to_float(metrics.get("turnover"))
+    turnover = nq._to_float(measures.get("turnover"))
     columns[4].metric("Daily turnover",
                       nq.format_percent(turnover, 2) if np.isfinite(turnover)
                       else "Volume not reported",
                       help=nq.TOOLTIPS["turnover"])
-    note(f"Measured over {years} year{'s' if years > 1 else ''}. " + nq.EXPLANATIONS["risk"])
+    note(f"Measured over {years} year{'s' if years > 1 else ''}. "
+         f"The two figures written with a ± are sizes, not gains or losses: "
+         f"they say how far the price moves, in either direction, and can never "
+         f"be negative. The worst drop can only be negative. "
+         + nq.EXPLANATIONS["risk"])
 
     with st.expander("Drawdown"):
         history = prices.sort_values("date")
@@ -1294,17 +1412,28 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     if company["quarterly"].empty:
         st.error(f"No quarterly financial data available for {ticker}."); return
 
-    predictions = {h: predict(company["features"], models.get(h), h)
-                   for h in nq.HORIZON_TRADING_DAYS}
-    render_profile(company, predictions)
-
-    if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
-        st.warning(f"Only {company['n_quarters']} quarterly reports available. "
-                   f"NusaQuant wants at least {nq.MIN_QUARTERS_FOR_PREDICTION} "
-                   f"before treating a fundamental prediction as meaningful.")
+    # The profile belongs at the top of the page but needs figures that only
+    # exist once the price series has loaded. Claiming the space first and
+    # filling it afterwards keeps the reading order and the data order apart.
+    profile_slot = st.container()
+    quarters_slot = st.container()
 
     prices, window, technical = render_chart(
         company, controls["api_key"], controls["offline"])
+    features = with_price_features(company["features"], prices)
+    risk = predict(features, models.get("risk"), "risk")
+    predictions = {h: predict(features, models.get(h), h)
+                   for h in nq.HORIZON_TRADING_DAYS}
+    volatility = nq.risk_metrics(prices, PRICE_WINDOWS[window])["volatility"]
+
+    with profile_slot:
+        render_profile(company, risk, volatility)
+    if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
+        with quarters_slot:
+            st.warning(f"Only {company['n_quarters']} quarterly reports available. "
+                       f"NusaQuant wants at least {nq.MIN_QUARTERS_FOR_PREDICTION} "
+                       f"before treating a fundamental prediction as meaningful.")
+
     render_momentum_charts(prices)
     render_technical(technical, window)
     render_trading_conditions(prices if company["prices"].empty
@@ -1313,13 +1442,15 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
 
+    render_risk_analysis(prices, window, risk, models.get("risk"))
+
     if not models:
         render_missing_models()
     else:
+        render_return_intro()
         render_prediction(predictions["6m"], models.get("6m"), "6m")
         render_prediction(predictions["12m"], models.get("12m"), "12m")
 
-    render_risk(prices, window)
     disclaimer()
 
 
