@@ -1253,8 +1253,91 @@ def risk_band(probability: float) -> str:
     return "Calmer than most"
 
 
-def render_risk_analysis(prices: pd.DataFrame, window: str,
-                         risks: dict, models: dict, peers: dict) -> None:
+def render_forecast_explanation(models: dict, features: pd.DataFrame) -> None:
+    """What moved this company's forecast away from an ordinary one.
+
+    Both horizons in one table rather than an expander each: they read the
+    same four inputs, so side by side the reader can see which one each
+    horizon leans on, which is more interesting than either column alone.
+    """
+    tables = {}
+    for horizon in nq.RISK_HORIZONS:
+        frame = nq.explain_prediction(models.get(horizon), features)
+        if not frame.empty:
+            tables[horizon] = frame.set_index("feature")
+    if not tables:
+        return
+
+    with st.expander("Why these figures?"):
+        note("Each input is swapped for the value a typical company had, and "
+             "the forecast re-run. The gap is what that input is doing. "
+             "Effects are measured one at a time, so they need not add up to "
+             "the total \u2014 the ordering is the part to read.")
+        first = next(iter(tables.values()))
+        rows = {"Input": [nq.feature_label(f) for f in first.index],
+                "This company": [first.loc[f, "value"] for f in first.index],
+                "Typical": [first.loc[f, "typical"] for f in first.index]}
+        config = {
+            "Input": st.column_config.TextColumn(width="medium"),
+            "This company": st.column_config.NumberColumn(format="%.2f"),
+            "Typical": st.column_config.NumberColumn(format="%.2f")}
+        for horizon, frame in tables.items():
+            months = 6 if horizon.endswith("6m") else 12
+            label = f"{months}M effect"
+            rows[label] = [frame.loc[f, "effect"] * 100 if f in frame.index
+                           else np.nan for f in first.index]
+            config[label] = st.column_config.NumberColumn(
+                format="%+.0f pts", help=nq.TOOLTIPS["explanation"])
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                     column_config=config)
+
+
+def render_track_record(models: dict) -> None:
+    """What the forecast said at past rebalances, and what then happened.
+
+    This is the evidence the page was otherwise asking readers to take on
+    trust. "ROC-AUC 0.699" is a fact about a model; "the companies it called
+    low risk went on to move 31% a year and the ones it called high risk moved
+    63%" is the same fact about the world, and only the second one can be
+    checked against a reader's own experience.
+    """
+    records = {h: (models.get(h) or {}).get("track_record")
+               for h in nq.RISK_HORIZONS}
+    records = {h: r for h, r in records.items() if r and r.get("bands")}
+    if not records:
+        return
+
+    with st.expander("How well has this forecast worked?"):
+        first = next(iter(records.values()))
+        note(f"{first['n']} predictions across {first['rebalances']} past "
+             f"rebalances. At each one the model was fitted only on what was "
+             f"known before it, so nothing below has seen its own answer.")
+        rows = {"It predicted": [b["band"] + " risk" for b in first["bands"]]}
+        config = {"It predicted": st.column_config.TextColumn(width="medium")}
+        for horizon, record in records.items():
+            months = 6 if horizon.endswith("6m") else 12
+            label = f"{months}M: they then moved"
+            rows[label] = [b["realised"] * 100 for b in record["bands"]]
+            config[label] = st.column_config.NumberColumn(
+                format="\u00b1%.1f%%", help=nq.TOOLTIPS["track_record"])
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                     column_config=config)
+
+        for horizon, record in records.items():
+            months = 6 if horizon.endswith("6m") else 12
+            scores = ", ".join(f"{f['roc_auc']:.2f}" for f in record["folds"])
+            worst = record.get("worst_calibration") or {}
+            drift = (f" Around {worst['said']:.0%} the real rate was "
+                     f"{worst['happened']:.0%}, so read a mid-range figure as "
+                     f"\u201csomewhere in the middle\u201d rather than as a number."
+                     if worst.get("gap", 0) >= 0.1 else "")
+            st.caption(f"{months}M accuracy per rebalance: {scores} \u2014 0.50 "
+                       f"is a coin toss.{drift}")
+
+
+def render_risk_analysis(prices: pd.DataFrame, window: str, risks: dict,
+                         models: dict, peers: dict,
+                         features: pd.DataFrame) -> None:
     """One section for risk, forecast first and history underneath.
 
     These used to be two things in two places: a descriptive "Historical risk"
@@ -1305,6 +1388,9 @@ def render_risk_analysis(prices: pd.DataFrame, window: str,
                 st.warning("Did not beat chance out of sample.")
     if not shown:
         st.info("The volatility forecast is unavailable for this company.")
+
+    render_forecast_explanation(models, features)
+    render_track_record(models)
 
     st.markdown("**Historical Risk**")
     years = PRICE_WINDOWS[window]
@@ -1419,7 +1505,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
 
-    render_risk_analysis(prices, window, risks, models, peers)
+    render_risk_analysis(prices, window, risks, models, peers, features)
 
     if not models:
         render_missing_models()
@@ -1606,6 +1692,8 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             if artifact else "")
          + "Risk Class is the company's position among all companies on "
            "file, not an absolute scale. Click any heading to re-sort.")
+    render_track_record(models)
+
     if not controls["offline"]:
         st.caption("Volatility columns need daily price history, which live "
                    "mode does not fetch here. Switch to the cached snapshot "

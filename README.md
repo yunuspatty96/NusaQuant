@@ -388,6 +388,36 @@ quietly dropped: anomaly detection is a familiar-sounding technique that would
 have been easy to present as an edge, and the tested answer is that on this
 panel it is not one.
 
+**The forecast shows its own record.** Two collapsed panels sit under the
+volatility figures, where the questions they answer are actually asked rather
+than in a separate view a reader has to decide to visit.
+
+*Why these figures?* replaces each input with the value a typical company had
+and re-runs the forecast; the gap is that input's contribution. It is ablation
+rather than a Shapley value — contributions need not sum to the total, because
+a model can respond to combinations — but it needs no extra dependency and it
+gets the ordering right, which is what the question is about.
+
+*How well has this forecast worked?* reports what the model said at each past
+rebalance and what followed, out of sample by construction:
+
+| It predicted | 6M: they then moved | 12M: they then moved |
+|---|---:|---:|
+| Low risk | ±31.4% | ±34.1% |
+| Medium risk | ±37.6% | ±43.7% |
+| High risk | ±63.2% | ±60.4% |
+
+That is the same fact as "ROC-AUC 0.699", stated so it can be checked against
+a reader's own experience. Per-rebalance accuracy is printed alongside — 0.50,
+0.51, 0.68, 0.81, 0.77, 0.60, 0.83, 0.90 — which also shows the model
+improving as the panel grew, the strongest evidence available that more
+quarters help.
+
+The calibration weakness is printed rather than corrected. Around 59% the real
+rate was 39%. Isotonic and Platt scaling were both fitted leave-one-fold-out
+on these same folds and both came out worse — the shrinkage weight is already
+a calibration step, and stacking a second one on 237 rows only adds variance.
+
 **Risk is forecast as well as measured.** Direction of return does not clear
 the gate on this panel; volatility does. "Will this company swing more than
 the typical company", scored on the same purged folds against the same 0.55

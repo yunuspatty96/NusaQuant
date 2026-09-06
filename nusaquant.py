@@ -1289,6 +1289,71 @@ MIN_RISK_CROSS_SECTION = 8           # companies needed before a quarter can ran
 RISK_FEATURE_NAMES: list[str] = ["vol_3m", "der", "dist_52w_high", "reversal_1m"]
 
 
+#: What each model input is called on screen. The column names are fine in a
+#: dataframe and useless in a sentence: nobody reads "vol_3m" and thinks
+#: "how much it has been moving lately".
+FEATURE_LABELS: dict[str, str] = {
+    "vol_3m": "Volatility, last 3 months",
+    "der": "Debt to equity",
+    "dist_52w_high": "Distance from 52-week high",
+    "reversal_1m": "Last month's move",
+    "ps": "Price to sales",
+    "pbv": "Price to book",
+    "roa": "Return on assets",
+    "roe": "Return on equity",
+    "npm": "Net profit margin",
+}
+
+
+def feature_label(name: str) -> str:
+    return FEATURE_LABELS.get(name, name.replace("_", " ").capitalize())
+
+
+def explain_prediction(artifact: dict | None, row: pd.DataFrame) -> pd.DataFrame:
+    """How far each input moved this company's forecast.
+
+    One input at a time is replaced by the value a typical training company
+    had, and the forecast is re-run. The difference is that input's
+    contribution.
+
+    This is ablation, not a Shapley value, and the difference is worth being
+    honest about: contributions measured this way do not have to sum to the
+    total, because the model can respond to combinations. It is used anyway
+    because it needs no extra dependency, it is exact rather than sampled, and
+    the question a reader is asking — "what is driving this?" — is answered by
+    the ordering, which ablation gets right.
+    """
+    columns = ["feature", "label", "value", "typical", "effect"]
+    features = list((artifact or {}).get("feature_names", []))
+    medians = (artifact or {}).get("feature_medians") or {}
+    if not artifact or not features or not medians or row is None or row.empty:
+        return pd.DataFrame(columns=columns)
+    missing = [f for f in features if f not in row.columns]
+    if missing:
+        return pd.DataFrame(columns=columns)
+
+    pipeline = artifact["pipeline"]
+    try:
+        base = float(pipeline.predict_proba(row[features])[0, 1])
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for feature in features:
+        swapped = row[features].copy()
+        swapped.loc[:, feature] = medians.get(feature, np.nan)
+        try:
+            without = float(pipeline.predict_proba(swapped)[0, 1])
+        except Exception:
+            continue
+        rows.append({"feature": feature, "label": feature_label(feature),
+                     "value": _to_float(row[feature].iloc[0]),
+                     "typical": _to_float(medians.get(feature)),
+                     "effect": base - without})
+    frame = pd.DataFrame(rows, columns=columns)
+    return frame.reindex(frame.effect.abs().sort_values(ascending=False).index)
+
+
 def price_features(prices: pd.DataFrame, position: int) -> dict[str, float]:
     """Price-derived features as they stood at one bar, and no later.
 
@@ -2587,6 +2652,18 @@ TOOLTIPS: dict[str, str] = {
         "universe. Above 50% means wider swings than average are expected; "
         "below 50% means calmer. It says nothing about direction — a stock "
         "can be turbulent on the way up.",
+    "explanation":
+        "How far the forecast moves when this input alone is replaced by the "
+        "value a typical company had. Positive means the input is pushing the "
+        "forecast up. Effects are measured one at a time, so they need not sum "
+        "to the total \u2014 a model can respond to combinations of inputs as "
+        "well as to each one.",
+    "track_record":
+        "The volatility these companies actually recorded over the following "
+        "period, grouped by what the model predicted for them beforehand. "
+        "Every figure is out of sample: the model that scored each quarter was "
+        "fitted only on rows whose own forward window had closed before that "
+        "quarter began.",
     "risk_class":
         "High, Medium or Low, from where this company's volatility forecast "
         "sits among every company on file — the top third, middle third or "
