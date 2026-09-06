@@ -385,6 +385,12 @@ def configure_page() -> None:
                        height:.95rem; line-height:.95rem; text-align:center;
                        border:1px solid {GRID}; border-radius:50%;
                        font-size:.65rem; cursor:help; }}
+      .nq-disc {{ border:1.5px solid {NEGATIVE}; border-radius:6px;
+                  padding:.75rem .9rem; margin:1.6rem 0 .5rem;
+                  background:rgba(179,52,31,.04); }}
+      .nq-disc-title {{ color:{NEGATIVE}; font-weight:700; font-size:.82rem;
+                        letter-spacing:.06em; margin-bottom:.35rem; }}
+      .nq-disc-body {{ color:{MUTED}; font-size:.82rem; line-height:1.6; }}
       .nq-foot {{ margin:2.5rem 0 .5rem; padding-top:1rem;
                   border-top:1px solid {GRID}; color:{MUTED}; font-size:.8rem;
                   line-height:1.6; }}
@@ -426,6 +432,14 @@ def configure_page() -> None:
     </style>""", unsafe_allow_html=True)
 
 
+def disclaimer() -> None:
+    """The standing warning, boxed so it is not read as a caption."""
+    st.markdown(
+        "<div class='nq-disc'><div class='nq-disc-title'>DISCLAIMER!</div>"
+        f"<div class='nq-disc-body'>{escape(nq.DISCLAIMER)}</div></div>",
+        unsafe_allow_html=True)
+
+
 def footer() -> None:
     st.markdown(
         "<div class='nq-foot'>"
@@ -465,11 +479,10 @@ def render_missing_models() -> None:
     """Never invent a prediction to fill the gap — explain the actual cause."""
     report = diagnose_models()
     if report["diagnosis"] == "unreadable":
-        st.error("**Machine learning model files exist but could not be loaded.**\n\n"
-                 "Almost always a library version mismatch: a pickled pipeline "
-                 "is not portable across major scikit-learn or xgboost versions. "
-                 "Re-run `python train.py`, or match the versions in "
-                 "`requirements.txt`.")
+        st.error("**The estimates could not be loaded.**\n\n"
+                 "The saved files are present but unreadable in this "
+                 "environment, so probabilities cannot be shown. Everything "
+                 "measured from price history still works.")
     else:
         st.warning("**No trained models found.**\n\n"
                    "NusaQuant will not show a probability it has not trained.")
@@ -516,9 +529,8 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 
         api_key = ""
         if offline:
-            st.success(f"Cached mode — 0 API credits.\n\n"
-                       f"Snapshot as of {snapshot_as_of()} · "
-                       f"{len(snapshot)} companies")
+            st.success(f"Figures as of {snapshot_as_of()}\n\n"
+                       f"{len(snapshot)} companies covered")
         else:
             api_key = st.text_input(
                 "Sectors API key", value=st.session_state.get("api_key", ""),
@@ -541,9 +553,9 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 
         st.divider()
         if metadata:
-            st.caption(f"XGBoost v{metadata.get('version','—')} · "
-                       f"{len(metadata.get('feature_set', []))} features · "
-                       f"trained to {metadata.get('training_end_date','—')}")
+            st.caption(f"Estimates built from company filings up to "
+                       f"{metadata.get('training_end_date','—')}, across "
+                       f"{metadata.get('n_tickers','—')} companies.")
         else:
             st.caption("No trained models loaded.")
 
@@ -919,17 +931,17 @@ def render_trading_conditions(prices: pd.DataFrame) -> None:
          f"{turbulence:.2f}x" if np.isfinite(turbulence) else "Unavailable",
          nq.turbulence_band(turbulence), nq.TOOLTIPS["volatility_ratio"])
 
-    note(f"Measured against this stock's own past year, not against the market "
-         f"or against other companies: its 52-week low was "
-         f"{nq.format_rupiah(conditions['low_52w'], compact=False)} and its high "
-         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}. "
-         f"<br><br>These three are shown side by side rather than combined into "
-         f"a single fear-and-greed style score. Such a score was built and "
-         f"tested on this panel first: its rank correlation with the following "
-         f"six months of return was +0.017, and the pattern that did appear "
-         f"came from one company supplying a third of the extreme readings. A "
-         f"dial carrying a number that means nothing is worse than no dial, "
-         f"because the shape is familiar enough to be believed.")
+    note(f"Each reading compares this stock against its own past year, not "
+         f"against the market or other companies. Over that year it traded "
+         f"between {nq.format_rupiah(conditions['low_52w'], compact=False)} and "
+         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}."
+         f"<br><br>They are shown separately rather than combined into a single "
+         f"fear-and-greed style score. That score was tested here first and "
+         f"had no useful relationship to what happened next, so publishing one "
+         f"would put a familiar-looking dial on a number that means nothing. "
+         f"None of these three is good or bad on its own: a stock near its "
+         f"high may be running or may be expensive, and heavy trading "
+         f"accompanies panic as often as conviction.")
 
 
 def render_income_chart(company: dict) -> None:
@@ -1115,23 +1127,18 @@ def render_features(company: dict, model_features: list[str]) -> None:
          f"weighs these together rather than applying a rule to any single one."
          f"<br><br><strong>In model</strong> has three states. "
          f"<em>Yes</em> and <em>No (dropped)</em> apply to the {modelled} "
-         f"scale-free ratios the machine learning model may read; dropped means the "
-         f"ratio was missing for more than {nq.MAX_FEATURE_MISSINGNESS:.0%} of "
-         f"the training panel, so training left it out rather than impute its "
-         f"way around the gap. <em>Reference</em> is everything measured in "
-         f"rupiah: shown because a reader wants it, never modelled, because a "
-         f"level would let the machine learning model split on company size rather "
-         f"than on value."
-         f"<br><br><em>Snapshot</em> marks the dividend figures, which come "
-         f"from the screener as trailing values{screened} rather than "
-         f"reconstructed at each historical date. They are shown and never "
-         f"modelled: feeding today's yield to a 2022 observation would be "
-         f"look-ahead of exactly the kind the leakage audit exists to catch."
-         f"<br><br>A dash is a metric this company did not file for the period, "
-         f"or one that would be economically meaningless — a P/E on a loss "
-         f"is a category error, not a cheap stock — and the Meaning column "
-         f"says which. NPL, LDR, NIM and the dividend ratios are not listed at "
-         f"all: the quarterly endpoint returns none of the fields they need.")
+         f"ratios the estimate is allowed to read; dropped means too many "
+         f"companies were missing it for it to be usable. <em>Reference</em> "
+         f"is everything measured in rupiah: useful to see, but never fed to "
+         f"the estimate, because a large company is not a better one."
+         f"<br><br><em>Snapshot</em> marks the dividend figures{screened}. "
+         f"They are current readings rather than a history, so they are shown "
+         f"for reference and left out of the estimates."
+         f"<br><br>A dash means the company did not report that figure for the "
+         f"period, or that the ratio would be meaningless — a P/E on a loss "
+         f"is not a cheap stock — and the Meaning column says which. Bank "
+         f"ratios such as NPL and LDR are not shown because the underlying "
+         f"figures are not available here.")
 
 
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
@@ -1269,8 +1276,8 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 
     if st.session_state.get("analysed") != ticker:
         st.info("Select a stock and press **Analyze**.")
-        st.caption("Cached mode — 0 credits." if controls["offline"]
-                   else f"About {CREDITS_PER_COMPANY} credits per analysis.")
+        st.caption("" if controls["offline"]
+                   else f"About {CREDITS_PER_COMPANY} API credits per analysis.")
         return
 
     try:
@@ -1308,7 +1315,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
         render_prediction(predictions["12m"], models.get("12m"), "12m")
 
     render_risk(prices, window)
-    st.caption(nq.DISCLAIMER)
+    disclaimer()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1348,7 +1355,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
                          help=UNIVERSE_SIZE_HELP.format(total=len(companies)))
         st.caption(UNIVERSE_SIZE_NOTE)
         if controls["offline"]:
-            st.caption("Cached mode — this ranking costs 0 API credits.")
+            st.caption(f"Ranking the companies recorded on {snapshot_as_of()}.")
         else:
             st.caption(f"Estimated cost: about "
                        f"{size * CREDITS_PER_COMPANY:,} API credits.")
@@ -1462,7 +1469,7 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
         with st.expander(f"Excluded by quality gates ({len(excluded)})"):
             st.dataframe(excluded[["ticker", "company_name", "reason"]],
                          width="stretch", hide_index=True)
-    st.caption(nq.DISCLAIMER)
+    disclaimer()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1498,9 +1505,9 @@ def render_sector_ranking(controls: dict) -> None:
     section(MODE_SECTOR)
     universe = nq.load_universe()
     if universe.empty or "sector" not in universe.columns:
-        st.warning("The cached universe carries no IDX classification yet. "
-                   "Run `python train.py --screen` once — it costs 1 credit "
-                   "and covers every company in the screen.")
+        st.warning("Sector information is not available in this snapshot, so "
+                   "companies cannot be grouped or compared against their "
+                   "peers yet.")
         return
 
     cached = [t for t in by_market_cap(
@@ -1545,14 +1552,13 @@ def render_sector_ranking(controls: dict) -> None:
         members = sorted(pool.loc[pool[level] == name, "symbol"])
         with st.spinner(f"Scoring {len(members)} companies…"):
             table = cached_sector_table(members)
-        source = ("NusaQuant's own point-in-time ratios, computed from the "
-                  "cached snapshot at zero credits")
+        source = ("ratios calculated here from each company's own filings")
     else:
         names = sorted(universe[level].dropna().unique())
         name = st.selectbox(level_label, names)
-        st.caption(f"Live mode — this screen costs 1 API credit and returns up "
-                   f"to {size} companies in the group, largest by market "
-                   f"capitalisation first, not only the cached ones.")
+        st.caption(f"Live data: up to {size} companies in this group, "
+                   f"largest by market capitalisation first. Costs 1 API "
+                   f"credit.")
         if not st.button("Screen this group", type="primary"):
             st.info("Press the button to run the screen."); return
         try:
@@ -1560,8 +1566,7 @@ def render_sector_ranking(controls: dict) -> None:
                                         name=name, limit=size)
         except nq.SectorsAPIError as error:
             show_error(error); return
-        source = ("Sectors' own screener ratios (pe_ttm, pb_mrq, ps_ttm, "
-                  "der_mrq, roa_ttm, roe_ttm), as of the screen date")
+        source = ("ratios published by Sectors, current as of this screen")
 
     if table.empty:
         st.info("No company came back for this group."); return
@@ -1631,19 +1636,19 @@ def render_sector_ranking(controls: dict) -> None:
 
     if any(m in present for m in ("dividend_yield", "dpr")):
         as_of = nq.screen_as_of()
-        note(f"Dividend yield and payout are trailing figures from the Sectors "
-             f"screener{f', taken on {as_of}' if as_of else ''}, not "
-             f"point-in-time history. A company with no reading either pays "
-             f"nothing or was not covered by the screen — the two are not "
-             f"distinguished, so an absent yield is shown as a dash rather "
-             f"than as zero.")
+        note(f"Dividend figures are the most recent available"
+             f"{f' as of {as_of}' if as_of else ''}. A company with no reading "
+             f"either pays no dividend or has none on record — the two "
+             f"cannot be told apart here, so it is shown as a dash rather than "
+             f"as zero.")
 
-    note(f"<strong>Source.</strong> {source}. Comparing within a sector is the "
-         f"point: a bank's balance sheet and a miner's are not alike, and a "
-         f"ratio that looks extreme across the whole market is often ordinary "
-         f"beside its own peers. This view is descriptive and has no machine "
-         f"learning model in it.")
-    st.caption(nq.DISCLAIMER)
+    note(f"Figures shown are {source}."
+         f"<br><br>Comparing inside a sector is the point of this view. A "
+         f"bank's balance sheet and a miner's are not alike, so a ratio that "
+         f"looks extreme against the whole market is often ordinary beside a "
+         f"company's own competitors. Nothing here is a prediction: these are "
+         f"today's figures, ranked.")
+    disclaimer()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1665,13 +1670,13 @@ def main() -> None:
         companies = by_market_cap(pd.DataFrame({
             "symbol": controls["snapshot"],
             "company_name": [names.get(t, t) for t in controls["snapshot"]]}))
-        st.info(f"Cached mode — no API credits are being spent. Figures are a "
-                f"real Sectors snapshot taken on {snapshot_as_of()}, not today's "
-                f"market.")
+        st.info(f"Everything on this page is real market data recorded on "
+                f"{snapshot_as_of()}. It is not today's market — prices and "
+                f"figures will have moved since.")
     else:
         if not controls["api_key"]:
             st.info(nq.WELCOME)
-            st.caption(nq.DISCLAIMER)
+            disclaimer()
             footer()
             return
         try:

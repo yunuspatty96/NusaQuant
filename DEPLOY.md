@@ -121,7 +121,9 @@ validasi. Tidak perlu `SECTORS_API_KEY`.
 streamlit run app.py
 ```
 
-Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pastikan **6M probability** dan **12M probability** menampilkan angka persen, bukan `—`.
+Aplikasi terbuka di mode **Cached snapshot**. Tanpa API key, tanpa kredit. Pastikan **6M probability of positive return** dan **12M probability of positive return** menampilkan angka persen, bukan `—`.
+
+Narasi di aplikasi ditulis untuk pembaca — investor dan peneliti dari yang sangat awam sampai mahir — bukan untuk pengembang. Istilah internal seperti nama endpoint, jumlah kredit di mode cached, atau nama fungsi tidak ditampilkan. Kalau Anda menambahkan teks baru, ikuti aturan yang sama.
 
 Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Top Picks (Ranked)**, dan **Sector Ranking (Compare Ratios)**.
 

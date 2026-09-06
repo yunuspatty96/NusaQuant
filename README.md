@@ -6,8 +6,11 @@ over 6 and 12 months.**
 
 Data: [Sectors Financial API v2](https://docs.sectors.app/). Model: XGBoost.
 
-> Research and decision support only. Probabilities are model estimates, not
-> guarantees and not financial advice.
+> **DISCLAIMER!** NusaQuant provides quantitative analysis to support research
+> and decision-making. Model probabilities, forecasts, and other analyses are
+> estimates and may be inaccurate; they are not guarantees of future outcomes
+> and do not constitute financial advice. You are solely responsible for your
+> own decisions and assume all associated risks.
 
 **Deployment steps: see [DEPLOY.md](DEPLOY.md).**
 
@@ -131,6 +134,9 @@ momentum, trend, income statement and every metric.
 by the machine learning model's probability, with risk and trend measured
 separately from price history alone.
 
+Every view ends with the disclaimer in a red-bordered box rather than a grey
+caption, because a caption is the first thing a reader's eye skips.
+
 **Sector Ranking (Compare Ratios)** — pick a sector or sub-sector, rank
 its companies on any ratio, and read each against the peer median. Multiples
 sort cheapest first and percentages sort most profitable first, derived from the
@@ -155,6 +161,7 @@ The single-stock page runs in this order:
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Trading conditions | Position in the 52-week range, volume and movement against the stock's own normal |
+| Disclaimer | Boxed in red at the foot of every view |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
 | 6-month and 12-month outlook | Probability, reliability, out-of-sample AUC, fold count |
@@ -378,9 +385,13 @@ history to the same names.
 
 ## Disclaimer
 
-NusaQuant provides quantitative analysis for research and decision support.
-Model probabilities are estimates, not guarantees or financial advice. Market
-data © [Sectors](https://sectors.app/), used under their API terms.
+NusaQuant provides quantitative analysis to support research and
+decision-making. Model probabilities, forecasts, and other analyses are
+estimates and may be inaccurate; they are not guarantees of future outcomes and
+do not constitute financial advice. You are solely responsible for your own
+decisions and assume all associated risks.
+
+Market data © [Sectors](https://sectors.app/), used under their API terms.
 
 ## Developer
 Patty Kyoudai

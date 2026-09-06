@@ -2158,17 +2158,17 @@ def explain_reliability(label: str, horizon: str) -> str:
 TOOLTIPS: dict[str, str] = {
     # — profile —
     "latest_close":
-        "The last closing price in the data being shown. In cached mode that "
-        "is the snapshot date printed at the top of the page, not today.",
+        "The most recent closing price in the data being shown. Check the date "
+        "at the top of the page — it may not be today's market.",
     "market_cap":
-        "Closing price times shares outstanding on the same day. Every "
-        "valuation ratio on this page is built from this figure rather than "
-        "from a share count, so splits and rights issues cannot distort them.",
+        "What the whole company is worth at the current price: the share price "
+        "times the number of shares. It is the size of the business as the "
+        "market prices it, and every valuation ratio here is built from it.",
     "probability":
-        "The machine learning model's estimated probability that this stock's "
-        "return is above zero over the horizon. It is a probability of "
-        "direction, not a forecast return and not a price target. Read the "
-        "reliability figure below it before treating it as a signal.",
+        "The estimated chance that this stock ends the period higher than it "
+        "is today. It says nothing about how much it might rise, only whether "
+        "it rises at all. Always read the reliability figure beside it before "
+        "giving this number any weight.",
 
     # — technical state —
     "trend":
@@ -2200,34 +2200,37 @@ TOOLTIPS: dict[str, str] = {
 
     # — outlook —
     "reliability":
-        "A 0-100 score from out-of-sample validation: 40% rank quality, 25% "
-        "precision against the base rate, 20% calibration against the "
-        "prior-only baseline, 15% fold-to-fold stability. \"No measurable "
-        "edge\" means the model did not out-rank a coin flip by enough to "
-        "report, and its probabilities are shrunk toward the historical base "
-        "rate as a result.",
+        "How well these estimates held up when tested against years the model "
+        "had never seen, scored 0 to 100. It weighs whether the model sorted "
+        "winners above losers, whether its percentages meant what they said, "
+        "and whether it kept doing so year after year. \"No measurable edge\" "
+        "means it did no better than a coin flip, so its percentages are "
+        "deliberately pulled close to the historical average and should not be "
+        "read as a view on this particular company.",
     "roc_auc":
-        "How often the model ranked a winner above a loser, averaged within "
-        "each validation fold. 0.50 is a coin flip and 1.00 is perfect. "
-        "Averaged inside folds and never pooled across them: the share of "
-        "stocks that rose swings from 0% to 100% between quarters, and pooling "
-        "lets that swing masquerade as stock-picking skill.",
+        "Pick a stock that rose and one that fell: this is how often the model "
+        "gave the higher probability to the one that rose. 0.50 is a coin "
+        "flip, 1.00 is perfect. Anything close to 0.50 means the ranking "
+        "carries no information you could act on.",
     "folds":
-        "How many purged walk-forward folds the scores are measured over, one "
-        "per quarterly rebalance. A row joins the training set only once its "
-        "own forward window has closed, so nothing the model learned from had "
-        "resolved after the period it is being tested on.",
+        "How many separate past periods these scores were tested against. The "
+        "model was only ever shown information available at the time, then "
+        "judged on what happened next — so this is a record of past "
+        "performance, not of fitting the past. More periods means a steadier "
+        "measurement.",
     "data_quality":
-        "The share of the model's own inputs that are present for this "
-        "company. It is not model reliability: complete data fed to a model "
-        "with no edge is still an answer with no edge.",
+        "How much of the information this estimate needs was actually "
+        "available for this company. A low figure means it rests on gaps. It "
+        "is not a measure of whether the estimate is any good — that is what "
+        "reliability tells you.",
 
     # — historical risk —
     "risk_band":
-        "A 0-100 blend of volatility, drawdown, downside volatility and "
-        "liquidity, placed in a band. Measured from price history alone and "
-        "kept separate from every probability above, because a stock can be "
-        "likely to rise and violently volatile at the same time.",
+        "How rough a ride this stock has given its holders, combining how "
+        "sharply it moves, how far it has fallen from its peaks, and how "
+        "easily it trades. Judged on price history alone and kept apart from "
+        "the probabilities above: a stock can be likely to rise and still be "
+        "punishing to hold.",
     "volatility":
         "Standard deviation of daily returns scaled to a year. Higher means "
         "the price moved more — in both directions, not only down.",
@@ -2270,12 +2273,11 @@ TOOLTIPS: dict[str, str] = {
 
     # — ranking table —
     "rank":
-        "Position by the machine learning model's estimated probability, "
-        "highest first.",
+        "Position by estimated chance of rising, highest first.",
     "ticker":
         "IDX ticker symbol.",
     "company":
-        "Registered company name as filed with IDX.",
+        "Registered company name.",
     "risk_column":
         "Historical risk band, ranked against the other companies in this "
         "table rather than against a fixed threshold, so \"High\" means high "
@@ -2284,17 +2286,19 @@ TOOLTIPS: dict[str, str] = {
 
 
 EXPLANATIONS = {
-    "probability": ("The percentage is the machine learning model's estimated "
-                    "probability that the "
-                    "return will be above 0% over the horizon. It is not a "
-                    "guaranteed return and not a price target."),
-    "reliability": ("Reliability describes how the machine learning model performed "
-                    "on historical "
-                    "out-of-sample validation — higher means its past predictions "
-                    "were more consistent and better calibrated."),
-    "risk": ("Risk summarises historical volatility, drawdown, downside movement "
-             "and liquidity. It describes what already happened and does not "
-             "guarantee future risk."),
+    "probability": ("The percentage is the estimated chance that this stock's "
+                    "price ends the period higher than it is today. It is a "
+                    "chance of going up, not a forecast of how much, and not a "
+                    "price target."),
+    "reliability": ("Reliability is how well these estimates held up when "
+                    "tested against years the model had never seen. High "
+                    "reliability means its past calls were consistent and its "
+                    "percentages meant what they said. Low reliability means "
+                    "they were not, and the number deserves little weight."),
+    "risk": ("Risk summarises how sharply this stock has moved, how far it has "
+             "fallen from its peaks, and how easily it trades. It describes "
+             "what has already happened and carries no promise about what "
+             "comes next."),
     "cone": ("<strong>How to read the shaded range.</strong> It shows how far "
              "this stock's price could drift over the next 6 and 12 months, "
              "based on how much it has actually moved over the past year. "
@@ -2302,32 +2306,29 @@ EXPLANATIONS = {
              "the time in the past, the price ended up inside this band."
              "<br><br><strong>It does not say which way.</strong> The range is "
              "the same size above and below today's price on purpose. Whether "
-             "the stock rises or falls is what the probability figures try to "
-             "answer, and on this snapshot they answer it poorly."
+             "the stock rises or falls is a separate question, and the "
+             "probability figures further down are what try to answer it."
              "<br><br><strong>It assumes the stock keeps moving as much as it "
              "has been.</strong> If the market goes quiet the real range will "
              "be narrower than this, and if it panics it will be wider. A "
-             "range is not a promise, and prices can and do finish outside it."
-             "<br><br>The widths were measured on this project's own cached "
-             "companies rather than taken from a textbook, and those "
-             "measurements overlap heavily, so read them as roughly right "
-             "rather than exact."),
+             "range is not a promise, and prices can and do finish outside it."),
     "technical": ("These indicators describe what the price has already done. "
-                  "They are not a forecast and they are not part of the machine "
-                  "learning model — "
-                  "momentum and volatility were tested as model features on this "
-                  "panel and did not earn a place. Read them the way you read the "
-                  "risk block: as context, not as a signal to act on."),
-    "data_quality": ("Data quality is the share of the machine learning model's "
-                     "required inputs "
-                     "available for this company. It is not machine learning model "
-                     "reliability."),
+                  "They are not a forecast, and they are separate from the "
+                  "probability estimates further down. Read them as context "
+                  "for a decision, not as a signal to act on."),
+    "data_quality": ("Data quality is how much of the information this "
+                     "estimate needs was actually available for this company. "
+                     "A low figure means the estimate rests on gaps. It says "
+                     "nothing about whether the estimate itself is any good."),
 }
 
-DISCLAIMER = ("NusaQuant provides quantitative analysis for research and decision "
-              "support. Machine learning model probabilities are estimates, not "
-              "guarantees or "
-              "financial advice.")
+
+DISCLAIMER = (
+    "NusaQuant provides quantitative analysis to support research and "
+    "decision-making. Model probabilities, forecasts, and other analyses are "
+    "estimates and may be inaccurate; they are not guarantees of future "
+    "outcomes and do not constitute financial advice. You are solely "
+    "responsible for your own decisions and assume all associated risks.")
 
 WELCOME = ("Understand the IDX market through data.\n\n"
            "NusaQuant combines fundamental financial features with machine "

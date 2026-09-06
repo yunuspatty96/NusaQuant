@@ -331,7 +331,9 @@ check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
       str(radio(at, "Data source").value))
 succ = " ".join(s.value for s in at.success)
-check("states 0 credits", "0 API credits" in succ, succ[:100])
+# The sidebar now tells the reader when the figures are from rather than what
+# they cost to fetch; the credit accounting is the operator's concern.
+check("states the data vintage", "Figures as of" in succ, succ[:100])
 
 at.session_state["ticker"] = TICKERS[0]; at.session_state["analysed"] = TICKERS[0]
 at.run()
