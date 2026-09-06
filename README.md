@@ -392,13 +392,13 @@ panel it is not one.
 volatility figures, where the questions they answer are actually asked rather
 than in a separate view a reader has to decide to visit.
 
-*Why these figures?* replaces each input with the value a typical company had
+*Why these numbers?* replaces each input with the value a typical company had
 and re-runs the forecast; the gap is that input's contribution. It is ablation
 rather than a Shapley value — contributions need not sum to the total, because
 a model can respond to combinations — but it needs no extra dependency and it
 gets the ordering right, which is what the question is about.
 
-*How well has this forecast worked?* reports what the model said at each past
+*Has this been right before?* reports what the model said at each past
 rebalance and what followed, out of sample by construction:
 
 | It predicted | 6M: they then moved | 12M: they then moved |
@@ -408,10 +408,16 @@ rebalance and what followed, out of sample by construction:
 | High risk | ±63.2% | ±60.4% |
 
 That is the same fact as "ROC-AUC 0.699", stated so it can be checked against
-a reader's own experience. Per-rebalance accuracy is printed alongside — 0.50,
-0.51, 0.68, 0.81, 0.77, 0.60, 0.83, 0.90 — which also shows the model
-improving as the panel grew, the strongest evidence available that more
-quarters help.
+a reader's own experience. Both panels lead with a sentence and keep the
+figures beside it: the first draft printed raw inputs — 0.777438 against a
+typical 0.325607, and an effect of "+30 pts" — every one of which is precise
+and none of which tells a reader anything, because the units are invisible and
+the scale is unknown.
+
+Accuracy is reported as how often it beat a coin toss, 6 of 8 periods at six
+months, rather than as a list of ROC-AUCs. The underlying series does show the
+model improving as the panel grew, which is the strongest evidence available
+that more quarters help.
 
 The calibration weakness is printed rather than corrected. Around 59% the real
 rate was 39%. Isotonic and Platt scaling were both fitted leave-one-fold-out

@@ -1232,7 +1232,14 @@ def render_return_forecast(predictions: dict, models: dict) -> None:
 
             st.metric(label, f"{probability * 100:.0f}%",
                       help=nq.TOOLTIPS["probability"])
-            st.caption(nq.probability_band(probability, has_edge))
+            # What the number means, not what it is worth. The band used to
+            # sit here and, with no edge at either horizon, it always read
+            # "No measurable edge" — which the validation line directly below
+            # already says. Saying it twice crowded out the one thing nobody
+            # was told: how to read a probability at all.
+            st.caption(f"Out of 100 past cases scored around "
+                       f"{probability * 100:.0f}%, about "
+                       f"{probability * 100:.0f} rose.")
             probability_bar(probability)
             auc = nq._to_float(metrics.get("roc_auc"))
             folds = (artifact or {}).get("validation_folds", "\u2014")
@@ -1254,11 +1261,13 @@ def risk_band(probability: float) -> str:
 
 
 def render_forecast_explanation(models: dict, features: pd.DataFrame) -> None:
-    """What moved this company's forecast away from an ordinary one.
+    """What moved this company's forecast, in words before numbers.
 
-    Both horizons in one table rather than an expander each: they read the
-    same four inputs, so side by side the reader can see which one each
-    horizon leans on, which is more interesting than either column alone.
+    The first version of this panel printed the raw model inputs — 0.777438
+    against a typical 0.325607, and an effect of "+30 pts". Every one of those
+    is precise and none of them tells a reader anything, because the units are
+    invisible and the scale is unknown. The numbers are still here, one column
+    to the right of the sentence that says what they mean.
     """
     tables = {}
     for horizon in nq.RISK_HORIZONS:
@@ -1268,38 +1277,45 @@ def render_forecast_explanation(models: dict, features: pd.DataFrame) -> None:
     if not tables:
         return
 
-    with st.expander("Why these figures?"):
-        note("Each input is swapped for the value a typical company had, and "
-             "the forecast re-run. The gap is what that input is doing. "
-             "Effects are measured one at a time, so they need not add up to "
-             "the total \u2014 the ordering is the part to read.")
-        first = next(iter(tables.values()))
-        rows = {"Input": [nq.feature_label(f) for f in first.index],
-                "This company": [first.loc[f, "value"] for f in first.index],
-                "Typical": [first.loc[f, "typical"] for f in first.index]}
+    # Not `tables.get(...) or next(...)`: a DataFrame has no truth value, and
+    # pandas raises rather than guessing.
+    short = tables["risk_6m"] if "risk_6m" in tables else next(iter(tables.values()))
+    top = short.iloc[0] if len(short) else None
+
+    with st.expander("Why these numbers?"):
+        if top is not None:
+            direction = "up" if top["effect"] > 0 else "down"
+            note(f"Mostly one thing: <strong>{top['label'].lower()}</strong> is "
+                 f"{nq.compare_words(top['value'], top['typical'])} for this "
+                 f"company, and that pushes the 6-month figure {direction}. "
+                 f"The rest matter less.")
+        rows = {"What the model looked at": [nq.feature_label(f) for f in short.index],
+                "This company": [nq.format_feature(f, short.loc[f, "value"])
+                                 for f in short.index],
+                "A typical company": [nq.format_feature(f, short.loc[f, "typical"])
+                                      for f in short.index]}
         config = {
-            "Input": st.column_config.TextColumn(width="medium"),
-            "This company": st.column_config.NumberColumn(format="%.2f"),
-            "Typical": st.column_config.NumberColumn(format="%.2f")}
+            "What the model looked at": st.column_config.TextColumn(width="medium"),
+            "This company": st.column_config.TextColumn(width="small"),
+            "A typical company": st.column_config.TextColumn(width="small")}
         for horizon, frame in tables.items():
             months = 6 if horizon.endswith("6m") else 12
-            label = f"{months}M effect"
-            rows[label] = [frame.loc[f, "effect"] * 100 if f in frame.index
-                           else np.nan for f in first.index]
-            config[label] = st.column_config.NumberColumn(
-                format="%+.0f pts", help=nq.TOOLTIPS["explanation"])
+            label = f"Effect on the {months}M figure"
+            rows[label] = [nq.effect_words(frame.loc[f, "effect"])
+                           if f in frame.index else "\u2014" for f in short.index]
+            config[label] = st.column_config.TextColumn(
+                width="medium", help=nq.TOOLTIPS["explanation"])
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
                      column_config=config)
 
 
 def render_track_record(models: dict) -> None:
-    """What the forecast said at past rebalances, and what then happened.
+    """What the forecast said before, and what happened after.
 
     This is the evidence the page was otherwise asking readers to take on
-    trust. "ROC-AUC 0.699" is a fact about a model; "the companies it called
-    low risk went on to move 31% a year and the ones it called high risk moved
-    63%" is the same fact about the world, and only the second one can be
-    checked against a reader's own experience.
+    trust. "ROC-AUC 0.699" is a fact about a model; "the ones it called high
+    risk went on to move twice as much" is the same fact about the world, and
+    only the second can be checked against a reader's own experience.
     """
     records = {h: (models.get(h) or {}).get("track_record")
                for h in nq.RISK_HORIZONS}
@@ -1307,32 +1323,49 @@ def render_track_record(models: dict) -> None:
     if not records:
         return
 
-    with st.expander("How well has this forecast worked?"):
-        first = next(iter(records.values()))
-        note(f"{first['n']} predictions across {first['rebalances']} past "
-             f"rebalances. At each one the model was fitted only on what was "
-             f"known before it, so nothing below has seen its own answer.")
-        rows = {"It predicted": [b["band"] + " risk" for b in first["bands"]]}
-        config = {"It predicted": st.column_config.TextColumn(width="medium")}
+    short = (records["risk_6m"] if "risk_6m" in records
+             else next(iter(records.values())))
+    bands = {b["band"]: b for b in short["bands"]}
+    with st.expander("Has this been right before?"):
+        low, high = bands.get("Low"), bands.get("High")
+        if low and high and low["realised"] > 0:
+            times = high["realised"] / low["realised"]
+            note(f"Yes, on the whole. Over {short['rebalances']} past "
+                 f"six-month periods, the companies it marked "
+                 f"<strong>Low risk</strong> went on to move about "
+                 f"{nq.format_swing(low['realised'], 0)} across a year. The "
+                 f"ones it marked <strong>High risk</strong> moved "
+                 f"{nq.format_swing(high['realised'], 0)} \u2014 roughly "
+                 f"{times:.1f} times as much.")
+        rows = {"What it said beforehand": [f"{b['band']} risk"
+                                            for b in short["bands"]]}
+        config = {"What it said beforehand":
+                  st.column_config.TextColumn(width="medium")}
         for horizon, record in records.items():
             months = 6 if horizon.endswith("6m") else 12
-            label = f"{months}M: they then moved"
+            label = f"How much they moved, next {months} months"
             rows[label] = [b["realised"] * 100 for b in record["bands"]]
             config[label] = st.column_config.NumberColumn(
-                format="\u00b1%.1f%%", help=nq.TOOLTIPS["track_record"])
+                format="\u00b1%.0f%%", help=nq.TOOLTIPS["track_record"])
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
                      column_config=config)
 
+        # "0.50, 0.51, 0.68, 0.81…" is a fact about ROC-AUC, not about whether
+        # a reader should believe this. How often it beat a coin toss is.
         for horizon, record in records.items():
             months = 6 if horizon.endswith("6m") else 12
-            scores = ", ".join(f"{f['roc_auc']:.2f}" for f in record["folds"])
+            folds = record.get("folds") or []
+            if not folds:
+                continue
+            better = sum(1 for f in folds if f["roc_auc"] >= nq.MIN_EDGE_AUC)
             worst = record.get("worst_calibration") or {}
-            drift = (f" Around {worst['said']:.0%} the real rate was "
-                     f"{worst['happened']:.0%}, so read a mid-range figure as "
-                     f"\u201csomewhere in the middle\u201d rather than as a number."
+            drift = (f" It is least reliable in the middle: when it says around "
+                     f"{worst['said']:.0%}, the real rate has been nearer "
+                     f"{worst['happened']:.0%}, so treat a middling figure as "
+                     f"\u201cnot sure\u201d."
                      if worst.get("gap", 0) >= 0.1 else "")
-            st.caption(f"{months}M accuracy per rebalance: {scores} \u2014 0.50 "
-                       f"is a coin toss.{drift}")
+            st.caption(f"Over {months} months it did better than a coin toss in "
+                       f"{better} of {len(folds)} periods.{drift}")
 
 
 def render_risk_analysis(prices: pd.DataFrame, window: str, risks: dict,

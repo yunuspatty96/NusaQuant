@@ -483,22 +483,22 @@ check("feature table rendered", len(feat) == 1, f"{len(feat)} tables")
 # has to stay folded away: a reader who does not ask should not pay for it.
 _labels = [e.label for e in at.expander]
 check("the forecast can be explained where it is shown",
-      "Why these figures?" in _labels, ", ".join(_labels))
+      "Why these numbers?" in _labels, ", ".join(_labels))
 check("the track record sits with the forecast",
-      "How well has this forecast worked?" in _labels, ", ".join(_labels))
-_explain = [d.value for d in at.dataframe if "Input" in list(d.value.columns)]
+      "Has this been right before?" in _labels, ", ".join(_labels))
+_explain = [d.value for d in at.dataframe if "What the model looked at" in list(d.value.columns)]
 check("the explanation names inputs in words, not column names",
-      _explain and not any("_" in str(v) for v in _explain[0]["Input"]),
-      str(list(_explain[0]["Input"])) if _explain else "no table")
+      _explain and not any("_" in str(v) for v in _explain[0]["What the model looked at"]),
+      str(list(_explain[0]["What the model looked at"])) if _explain else "no table")
 _record = [d.value for d in at.dataframe
-           if "It predicted" in list(d.value.columns)]
+           if "What it said beforehand" in list(d.value.columns)]
 check("the track record reports what actually followed", _record,
       str([list(d.value.columns) for d in at.dataframe])[:160])
 if _record:
     check("the track record names all three classes",
-          list(_record[0]["It predicted"])
+          list(_record[0]["What it said beforehand"])
           == ["Low risk", "Medium risk", "High risk"],
-          str(list(_record[0]["It predicted"])))
+          str(list(_record[0]["What it said beforehand"])))
 
 # Whether low risk ACTUALLY moved less than high risk is a fact about the
 # shipped panel, not about this code, and the fixture here is random noise on
@@ -593,7 +593,7 @@ if _screen:
                   _before.startswith("6M") and _after.startswith("12M"),
                   f"{_before} then {_after}")
             check("the screen shows the same evidence as the stock page",
-              "How well has this forecast worked?" in [e.label for e in at.expander],
+              "Has this been right before?" in [e.label for e in at.expander],
               ", ".join(e.label for e in at.expander))
         check("risk classes are banded",
               set(_table["6M Risk Class"]) <= {"High", "Medium", "Low", "Unknown"},

@@ -1305,6 +1305,45 @@ FEATURE_LABELS: dict[str, str] = {
 }
 
 
+#: How each input should be written. A debt-to-equity of 0.46 is a ratio and
+#: reads as "0.46"; a volatility of 0.777 is a percentage and reads as "78%".
+#: Printed raw they look like the same kind of number, and neither means
+#: anything to a reader who has not seen the column before.
+FEATURE_UNITS: dict[str, str] = {
+    "vol_3m": "swing", "dist_52w_high": "percent", "reversal_1m": "percent",
+    "roa": "percent", "roe": "percent", "npm": "percent",
+    "der": "ratio", "ps": "ratio", "pbv": "ratio",
+}
+
+
+def compare_words(value: Any, typical: Any) -> str:
+    """Plainly, how this company sits against the typical one."""
+    a, b = _to_float(value), _to_float(typical)
+    if not np.isfinite(a) or not np.isfinite(b):
+        return "not reported"
+    if abs(b) < 1e-9:
+        return "higher than usual" if a > b else "lower than usual"
+    ratio = a / b if b > 0 else -a / abs(b)
+    if ratio >= 1.75: return "far above typical"
+    if ratio >= 1.15: return "above typical"
+    if ratio >= 0.85: return "about typical"
+    if ratio >= 0.4:  return "below typical"
+    return "far below typical"
+
+
+def effect_words(effect: Any) -> str:
+    """What this input is doing to the forecast, without the arithmetic."""
+    value = _to_float(effect)
+    if not np.isfinite(value):
+        return "\u2014"
+    points = value * 100
+    if points >= 15:  return "pushes it up a lot"
+    if points >= 5:   return "pushes it up"
+    if points > -5:   return "barely matters"
+    if points > -15:  return "pulls it down"
+    return "pulls it down a lot"
+
+
 def feature_label(name: str) -> str:
     return FEATURE_LABELS.get(name, name.replace("_", " ").capitalize())
 
@@ -2529,6 +2568,23 @@ def format_multiple(value: Any) -> str:
 
 
 def format_feature(name: str, value: Any) -> str:
+    # The price-derived inputs have no FeatureSpec — they are computed
+    # from bars rather than filings — so they are formatted from
+    # FEATURE_UNITS first. Without this they fell through to the dash
+    # below, and the explanation panel showed one on every row it cared
+    # about. A second format_feature was briefly defined above to handle
+    # them, which Python quietly shadowed with this one.
+    # Only where the schema has nothing to say. These units are a fallback for
+    # the bar-derived inputs, not an override: ROE is in FEATURE_SCHEMA and
+    # must keep reading "12.0%" in the Fundamentals table, which it stopped
+    # doing the moment this branch was allowed to win.
+    unit = None if name in FEATURE_BY_NAME else FEATURE_UNITS.get(name)
+    if unit in ("swing", "percent"):
+        number = _to_float(value)
+        if not np.isfinite(number):
+            return "—"
+        return (format_swing(number, 0) if unit == "swing"
+                else f"{number * 100:+.0f}%")
     spec = FEATURE_BY_NAME.get(name)
     if spec is None:
         return "—"
