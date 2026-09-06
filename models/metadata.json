@@ -17,6 +17,12 @@
   "universe_filter": "market_cap > 1000000000000",
   "universe_order_by": "-market_cap",
   "universe": [
+    "AADI",
+    "AALI",
+    "ABMM",
+    "ADES",
+    "ADMF",
+    "ADMR",
     "AMMN",
     "ASII",
     "BBCA",
@@ -44,16 +50,16 @@
     "UNTR"
   ],
   "training_end_date": "2026-06-29",
-  "dataset_rows": 339,
-  "n_tickers": 25,
+  "dataset_rows": 401,
+  "n_tickers": 31,
   "reporting_lag_days": 90,
   "snapshot_as_of": "2026-06-30",
   "validation": {
     "6m": {
-      "model": "xgb_depth1",
-      "shrinkage_weight": 0.7,
+      "model": "xgb_depth2",
+      "shrinkage_weight": 0.3,
       "folds": 9,
-      "roc_auc": 0.5211451092782792,
+      "roc_auc": 0.49911300003491266,
       "reliability": "No measurable edge",
       "has_edge": false
     },
@@ -61,7 +67,7 @@
       "model": "xgb_depth1",
       "shrinkage_weight": 0.05,
       "folds": 5,
-      "roc_auc": 0.4978571428571429,
+      "roc_auc": 0.48616071428571433,
       "reliability": "No measurable edge",
       "has_edge": false
     }
