@@ -1962,8 +1962,12 @@ def render_portfolio_mix(analysis: dict) -> None:
 def main() -> None:
     configure_page()
     st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nq-sub">IDX Machine Learning Market Intelligence · XGBoost probability '
-                'estimates for positive 6-month and 12-month returns.</div>',
+    # The subtitle used to promise probability estimates of positive returns,
+    # which is the one thing the testing says this cannot do. Leading with it
+    # made the honest labels further down read as a retraction.
+    st.markdown('<div class="nq-sub">IDX Machine Learning Market Intelligence · '
+                'Fundamentals, price history and a tested forecast of how much '
+                'a share is likely to move.</div>',
                 unsafe_allow_html=True)
 
     models, metadata = load_models()

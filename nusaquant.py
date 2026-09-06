@@ -2750,6 +2750,9 @@ DISCLAIMER = (
     "responsible for your own decisions and assume all associated risks.")
 
 WELCOME = ("Understand the IDX market through data.\n\n"
-           "NusaQuant combines fundamental financial features with machine "
-           "learning to estimate the probability of positive stock returns over "
-           "6 and 12 months.")
+           "NusaQuant reads company filings and price history to describe "
+           "what a share has done, how far it might travel, and how much "
+           "it is likely to move around. It also tested whether those "
+           "fundamentals can predict which way a price will go, reports "
+           "plainly that they could not, and shows you that result beside "
+           "the one forecast that did pass its test.")
