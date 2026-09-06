@@ -1413,23 +1413,29 @@ def moving_averages(prices: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
 #: The textbook multipliers are 1.00 for 68% and 2.00 for 95%. The 68% figure
 #: holds up here — a 6-month band drawn at 1.00 covered 66.7% against a
 #: theoretical 68.3% — but 2.00 covered only 87.5% rather than 95.4%. IDX
-#: returns have far fatter tails than a bell curve, and reaching a true 95%
-#: needs a multiplier near 3.7. At that width the band spans two orders of
-#: magnitude and tells a reader nothing, so 50% and 80% are what is shown.
+#: returns have far fatter tails than a bell curve, and a true 95% needs a
+#: multiplier near 3.7.
+#:
+#: Only the 50% band ships. The wider ones are correctly calibrated — split by
+#: volatility, the most volatile quarter of observations saw an 80% band catch
+#: 74.9% at six months, so if anything it is narrow — but half this panel's
+#: 12-month 80% ranges spanned more than five times bottom to top and MORA's
+#: spanned sixty-five. A range that wide is an accurate statement and a useless
+#: one, and printing it invited a reader to anchor on a number that meant
+#: nothing. One band, honestly labelled, says more.
 CONE_MULTIPLIERS: dict[int, dict[int, float]] = {
-    126: {50: 0.65, 80: 1.48},
-    252: {50: 0.75, 80: 1.73},
+    126: {50: 0.65},
+    252: {50: 0.75},
 }
 CONE_LOOKBACK = 252          # one year of daily returns behind each estimate
 
-#: Above this the range stops being information. A band is flagged when its top
-#: is more than five times its bottom — MORA's 12-month 80% range spans 65x,
-#: which is a correctly calibrated statement and a useless one. Coverage by
-#: volatility bucket confirms the width is not an error: for the most volatile
-#: quarter of observations the 80% band actually caught 74.9% at six months and
-#: 84.5% at twelve, so it is not too wide. The stock really does move that much,
-#: and the honest response is to say so rather than to draw it narrower.
-CONE_MAX_USEFUL_SPAN = 5.0
+#: Above this the range stops being information. Flagged when the band's top is
+#: more than three times its bottom, which on this panel is six companies of
+#: twenty-four against a median span of 2.1x. MORA's 12-month 50% range runs
+#: 6.1x. That is a correctly calibrated statement about a stock with 121%
+#: annualised volatility and a useless one to plan around, and saying so is
+#: better than drawing it narrower than the evidence supports.
+CONE_MAX_USEFUL_SPAN = 3.0
 
 
 def volatility_cone(prices: pd.DataFrame,
@@ -2155,10 +2161,9 @@ TOOLTIPS: dict[str, str] = {
         "separates them.",
     "cone_range":
         "How far the price could drift by this horizon, from how much the "
-        "stock has actually moved over the past year. The 50% range is where "
-        "it landed about half the time historically, the 80% range about eight "
-        "times in ten. It says how far, never which way, and it assumes the "
-        "stock keeps moving as much as it has been.",
+        "stock has actually moved over the past year. It is where the price "
+        "landed about half the time historically. It says how far, never which "
+        "way, and it assumes the stock keeps moving as much as it has been.",
     "support_resistance":
         "Prices this stock has repeatedly turned at before: a level is drawn "
         "where several swing highs or lows cluster together, and the more "
@@ -2201,10 +2206,7 @@ EXPLANATIONS = {
              "this stock's price could drift over the next 6 and 12 months, "
              "based on how much it has actually moved over the past year. "
              "Hover anywhere inside it to read the range on that date. Half "
-             "the time in the past the price ended up inside this band; the "
-             "table below the indicators adds a wider one that held eight "
-             "times in ten, which is left off the chart because for a volatile "
-             "stock it covers so much ground it would flatten the price line."
+             "the time in the past, the price ended up inside this band."
              "<br><br><strong>It does not say which way.</strong> The range is "
              "the same size above and below today's price on purpose. Whether "
              "the stock rises or falls is what the probability figures try to "

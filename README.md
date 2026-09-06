@@ -172,9 +172,19 @@ history behind it and checking what actually happened afterwards.
 
 A 6-month band drawn at 1.00 covered 66.7% against a theoretical 68.3%, which
 holds up. But 2.00 covered only 87.5% rather than 95.4%: IDX returns have far
-fatter tails than a bell curve, and a true 95% needs a multiplier near 3.7. At
-that width the band spans two orders of magnitude and tells a reader nothing,
-so the dashboard shows 50% and 80% instead, at the measured multipliers.
+fatter tails than a bell curve, and a true 95% needs a multiplier near 3.7.
+
+**One band ships, at 50%.** The wider ones are correctly calibrated — split by
+volatility, the most volatile quarter of observations saw an 80% band catch
+74.9% at six months, so if anything it is narrow — but half this panel's
+12-month 80% ranges spanned more than five times bottom to top and MORA's
+spanned sixty-five. A range that wide is an accurate statement and a useless
+one, and printing it invited a reader to anchor on a number that meant nothing.
+The multipliers shipped are 0.65 at six months and 0.75 at twelve.
+
+A 50% range still runs wide for a volatile stock: MORA's twelve-month band
+spans 6.1x against a panel median of 2.1x. Anything past three times is
+labelled too broad to act on rather than quietly drawn narrower.
 
 The cone is deliberately symmetric around the last close. It says how far the
 price might travel, never which way — direction is the probability's job, and

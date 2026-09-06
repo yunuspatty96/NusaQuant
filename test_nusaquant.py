@@ -270,7 +270,10 @@ if _cone.get("available"):
     _w = {(h, l): (hi / lo) for h, lv in _cone["bands"].items()
           for l, (lo, hi) in lv.items()}
     check("wider at 12 months than at 6", _w[(252, 50)] > _w[(126, 50)])
-    check("wider at 80% than at 50%", _w[(126, 80)] > _w[(126, 50)])
+    # One band only: the wider ones were correct but too broad to be read.
+    check("only the 50% band is produced",
+          set(nq.CONE_MULTIPLIERS[126]) == {50},
+          str(sorted(nq.CONE_MULTIPLIERS[126])))
     check("range is symmetric around the last close in log space",
           all(abs(np.log(hi / _last) + np.log(lo / _last)) < 1e-9
               for lv in _cone["bands"].values() for lo, hi in lv.values()))

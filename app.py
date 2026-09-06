@@ -794,6 +794,38 @@ def render_chart(company: dict, api_key: str,
                         spikecolor=GRID, spikedash="dot")
     st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
+    if cone.get("available"):
+        st.markdown("##### Projected range")
+        rows = []
+        for horizon, label in ((126, "6 months"), (252, "12 months")):
+            low, high = cone["bands"][horizon][50]
+            span_ratio = high / low if low > 0 else float("inf")
+            wide = cone.get("too_wide", {}).get(horizon)
+            caveat = (f"<span class='sub'>{span_ratio:.0f}x wide &mdash; too "
+                      f"broad to act on</span>" if wide else "")
+            rows.append(
+                f"<tr{' class=' + chr(39) + 'na' + chr(39) if wide else ''}>"
+                f"<td><strong>{label}</strong></td>"
+                f"<td>half the time{caveat}</td>"
+                f"<td class='num'>{escape(nq.format_rupiah(low, compact=False))}"
+                f" &ndash; {escape(nq.format_rupiah(high, compact=False))}</td>"
+                f"<td class='num'>{(high / cone['last'] - 1) * 100:+.0f}% / "
+                f"{(low / cone['last'] - 1) * 100:+.0f}%</td>"
+                "</tr>")
+        st.markdown(
+            "<table class='nq-table nq-cone'>"
+            "<colgroup><col style='width:18%'><col style='width:24%'>"
+            "<col style='width:34%'><col style='width:24%'></colgroup>"
+            "<thead><tr><th>Horizon</th><th>Lands inside</th>"
+            "<th>Price range</th><th>Versus today</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>", unsafe_allow_html=True)
+        if any(cone.get("too_wide", {}).values()):
+            note("This stock has moved so much over the past year that the "
+                 "range covers almost any outcome. That is an honest reading "
+                 "of how volatile it has been, not a fault in the figure — but "
+                 "it is too broad to plan around, and the shorter horizon is "
+                 "the more useful one here.")
+
     change = (last / first - 1.0) if first > 0 else np.nan
     note(f"Over this window the close moved from "
          f"{nq.format_rupiah(first, compact=False)} to "
@@ -842,41 +874,6 @@ def render_technical(technical: dict, window: str) -> None:
     tile(columns[5], "12-month return",
          nq.format_percent(technical.get("return_12m"), 0), None,
          nq.TOOLTIPS["return_12m"])
-
-    cone = technical.get("cone") or {}
-    if cone.get("available"):
-        st.markdown("##### Projected range")
-        rows = []
-        for horizon, label in ((126, "6 months"), (252, "12 months")):
-            for level in (50, 80):
-                low, high = cone["bands"][horizon][level]
-                span = high / low if low > 0 else float("inf")
-                wide = level == 80 and cone.get("too_wide", {}).get(horizon)
-                row_class = " class='na'" if wide else ""
-                caveat = (f"<span class='sub'>{span:.0f}x wide &mdash; too broad "
-                          f"to act on</span>" if wide else "")
-                rows.append(
-                    f"<tr{row_class}>"
-                    f"<td><strong>{label}</strong></td>"
-                    f"<td>{level}% of the time{caveat}</td>"
-                    f"<td class='num'>{escape(nq.format_rupiah(low, compact=False))}"
-                    f" &ndash; {escape(nq.format_rupiah(high, compact=False))}</td>"
-                    f"<td class='num'>{(high / cone['last'] - 1) * 100:+.0f}% / "
-                    f"{(low / cone['last'] - 1) * 100:+.0f}%</td>"
-                    "</tr>")
-        st.markdown(
-            "<table class='nq-table nq-cone'>"
-            "<colgroup><col style='width:16%'><col style='width:22%'>"
-            "<col style='width:38%'><col style='width:24%'></colgroup>"
-            "<thead><tr><th>Horizon</th><th>Lands inside</th><th>Price range</th>"
-            "<th>Versus today</th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table>", unsafe_allow_html=True)
-        if any(cone.get("too_wide", {}).values()):
-            note("This stock has moved so much over the past year that the "
-                 "wider range covers almost any outcome. That is an honest "
-                 "reading of how volatile it has been, not a fault in the "
-                 "figure — but it is too broad to plan around, and the shorter "
-                 "horizon is the more useful one here.")
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):
