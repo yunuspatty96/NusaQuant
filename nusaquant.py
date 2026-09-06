@@ -1862,13 +1862,14 @@ def portfolio_projection(analysis: dict[str, Any],
     """The calibrated range for the portfolio, and for each position in it.
 
     Per-position ranges are the same cone every stock page draws, applied to
-    the value of the holding rather than to one share. They are reported
-    alongside their own sum for one reason: a reader who is shown six ranges
-    will add them, and the sum is wrong. Every holding reaching its worst case
-    in the same six months is far less likely than any one of them doing so, so
-    the parts overstate the downside of the whole. Returning the sum next to
-    the portfolio's own figure is what makes that visible instead of leaving it
-    to be discovered.
+    the value of the holding rather than to one share.
+
+    ``sum_low``, ``sum_high`` and ``overstatement`` are returned but no longer
+    printed: the dashboard showed the summed row beside the portfolio's own and
+    the pair was cut as clutter. The caution they carry has moved into the
+    tooltip, and it still holds — the parts overstate the whole, because every
+    holding reaching its worst case in the same window is far less likely than
+    any one of them doing so.
     """
     if not analysis.get("available"):
         return {"available": False}

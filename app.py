@@ -599,7 +599,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 # SINGLE STOCK
 # ══════════════════════════════════════════════════════════════════════
 
-def render_profile(company: dict, risk: dict, peers: Sequence[float]) -> None:
+def render_profile(company: dict, risks: dict, peers: dict) -> None:
     ticker, name = company["ticker"], company["name"]
     heading = ticker if name == ticker else f"{ticker} <span>— {name}</span>"
     st.markdown(f"<div class='nq-name'>{heading}</div>", unsafe_allow_html=True)
@@ -612,7 +612,7 @@ def render_profile(company: dict, risk: dict, peers: Sequence[float]) -> None:
         st.markdown("".join(f"<span class='nq-chip'>{c}</span>" for c in chips),
                     unsafe_allow_html=True)
 
-    columns = st.columns(3)
+    columns = st.columns(4)
     columns[0].metric("Latest close",
                       nq.format_rupiah(overview.get("last_close_price"), compact=False),
                       help=nq.TOOLTIPS["latest_close"])
@@ -632,15 +632,20 @@ def render_profile(company: dict, risk: dict, peers: Sequence[float]) -> None:
     # figure itself for both horizons, and printing the same number in two
     # places is how a reader ends up asking which one to believe. What the top
     # of a page is good for is the one-glance answer.
-    if risk.get("available"):
-        columns[2].metric("6M Risk Class",
-                          nq.volatility_class(risk["probability"], peers),
+    for column, horizon in zip(columns[2:], nq.RISK_HORIZONS):
+        months = 6 if horizon.endswith("6m") else 12
+        result = risks.get(horizon, {})
+        if result.get("available"):
+            column.metric(f"{months}M Risk Class",
+                          nq.volatility_class(result["probability"],
+                                              peers.get(horizon, [])),
                           help=nq.TOOLTIPS["risk_class"])
-    else:
-        # Never a bare dash: an unavailable estimate has a cause, and the cause
-        # is more useful than the punctuation.
-        columns[2].metric("6M Risk Class", "Not available",
-                          help=risk.get("reason", "Volatility forecast unavailable."))
+        else:
+            # Never a bare dash: an unavailable estimate has a cause, and the
+            # cause is more useful than the punctuation.
+            column.metric(f"{months}M Risk Class", "Not available",
+                          help=result.get("reason",
+                                          "Volatility forecast unavailable."))
 
     period = company["latest_period"]
     period_text = ("not reported" if pd.isna(period)
@@ -1154,78 +1159,48 @@ def render_features(company: dict, model_features: list[str]) -> None:
          f"Meaning column says which.")
 
 
-def render_return_intro() -> None:
-    """Say why the return figures are down here rather than at the top."""
+def render_return_forecast(predictions: dict, models: dict) -> None:
+    """Both horizons side by side, shaped like the volatility forecast above.
+
+    Two stacked full-width sections, each with its own four-metric row, gave
+    the weaker of the two estimates more of the page than the stronger one.
+    Same shape, same density, and the difference between them is left to the
+    numbers rather than to the layout.
+    """
     section("Return Forecast")
     note("Tested on past periods, these fundamentals sorted risers above "
          "fallers <strong>no better than chance</strong>. Kept on the page "
-         "because a negative result is still a result. Read the figures as "
-         "the historical frequency of a rise, not as a view on this company.")
+         "because a negative result is still a result. Read each figure as the "
+         "historical frequency of a rise, not as a view on this company.")
 
+    for column, horizon in zip(st.columns(2), nq.HORIZON_TRADING_DAYS):
+        months = "6" if horizon == "6m" else "12"
+        result, artifact = predictions.get(horizon, {}), models.get(horizon)
+        label = f"{months}M Positive Return Probability"
+        with column:
+            if not result.get("available"):
+                st.metric(label, "Not available",
+                          help=result.get("reason", "Prediction unavailable."))
+                continue
+            probability = result["probability"]
+            reliability = (artifact or {}).get("reliability", {})
+            metrics = (artifact or {}).get("validation_metrics", {})
+            has_edge = bool((artifact or {}).get(
+                "has_edge", reliability.get("has_edge", True)))
 
-def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
-    months = "6" if horizon == "6m" else "12"
-    section(f"{months}M Positive Return Probability")
-
-    if not result.get("available"):
-        st.warning(result.get("reason", "Prediction unavailable."))
-        if result.get("missing"):
-            with st.expander("Technical details"):
-                st.code(", ".join(result["missing"]), language="text")
-        return
-
-    probability = result["probability"]
-    reliability = (artifact or {}).get("reliability", {})
-    metrics = (artifact or {}).get("validation_metrics", {})
-    has_edge = bool((artifact or {}).get("has_edge", reliability.get("has_edge", True)))
-
-    left, right = st.columns([1, 2])
-    with left:
-        st.metric("Probability of positive return", f"{probability * 100:.0f}%",
-                  help=nq.TOOLTIPS["probability"])
-        st.caption(nq.probability_band(probability, has_edge))
-    with right:
-        probability_bar(probability)
-        note(nq.explain_probability(probability, horizon, has_edge))
-
-    columns = st.columns(4)
-    columns[0].metric("Machine learning model reliability",
-                      reliability.get("label", "Unknown"),
-                      help=nq.TOOLTIPS["reliability"])
-    columns[1].metric("Out-of-sample ROC-AUC",
-                      f"{metrics.get('roc_auc', float('nan')):.3f}"
-                      if np.isfinite(nq._to_float(metrics.get("roc_auc"))) else "—",
-                      help=nq.TOOLTIPS["roc_auc"])
-    columns[2].metric("Validation folds", (artifact or {}).get("validation_folds", "—"),
-                      help=nq.TOOLTIPS["folds"])
-    columns[3].metric("Data quality", f"{result.get('data_quality', 0) * 100:.0f}%",
-                      help=nq.TOOLTIPS["data_quality"])
-
-    if not has_edge:
-        # The panel size is read from the artifact rather than written into the
-        # sentence: it was hard-coded at 15 and silently went stale the first
-        # time the universe grew.
-        tickers = (artifact or {}).get("n_training_tickers")
-        panel = f" — {tickers} tickers" if tickers else ""
-        st.warning(
-            f"**This machine learning model has no measurable edge.** Across purged "
-            "walk-forward "
-            f"folds it did not rank winners above losers by more than chance, so "
-            f"its probabilities are deliberately shrunk toward the historical "
-            f"base rate. Read the number as *how often stocks in this universe "
-            f"rose over this horizon*, not as a view on this company. The limit "
-            f"is the size of the training panel{panel} — not the algorithm.")
-    elif reliability.get("label") == "Weak":
-        st.warning("This machine learning model provides limited predictive separation on "
-                   "out-of-sample data. Treat the probability as weak evidence, "
-                   "not a signal.")
-
-    # The validation expander used to sit here: leaderboard, per-fold metrics,
-    # feature importances. It was removed because it read as a wall of numbers
-    # to anyone who had not just trained the model. Nothing is hidden — the
-    # figures above still name the reliability, the out-of-sample AUC and the
-    # fold count, and the full record lives in the artifact and in train.py's
-    # output for anyone auditing the repository.
+            st.metric(label, f"{probability * 100:.0f}%",
+                      help=nq.TOOLTIPS["probability"])
+            st.caption(nq.probability_band(probability, has_edge))
+            probability_bar(probability)
+            auc = nq._to_float(metrics.get("roc_auc"))
+            folds = (artifact or {}).get("validation_folds", "\u2014")
+            st.caption(f"Tested {auc:.0%} accurate over {folds} periods \u00b7 "
+                       f"{reliability.get('label', 'Unknown')}"
+                       if np.isfinite(auc) else "Not validated")
+            if not has_edge:
+                st.warning("No measurable edge: it did not rank risers above "
+                           "fallers by more than chance, so the figure is held "
+                           "near the historical base rate.")
 
 
 def risk_band(probability: float) -> str:
@@ -1390,7 +1365,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     predictions = {h: predict(features, models.get(h), h)
                    for h in nq.HORIZON_TRADING_DAYS}
     with profile_slot:
-        render_profile(company, risk, peers.get("risk_6m", []))
+        render_profile(company, risks, peers)
     if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
         with quarters_slot:
             st.warning(f"Only {company['n_quarters']} quarterly reports available. "
@@ -1410,9 +1385,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     if not models:
         render_missing_models()
     else:
-        render_return_intro()
-        render_prediction(predictions["6m"], models.get("6m"), "6m")
-        render_prediction(predictions["12m"], models.get("12m"), "12m")
+        render_return_forecast(predictions, models)
 
     disclaimer()
 
@@ -1519,6 +1492,7 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
 
     months = "6" if horizon == "6m" else "12"
     return_column = f"{months}M Positive Return Probability"
+    selected_risk = f"risk_{horizon}"
 
     # Ranked on the 6-month volatility forecast, ascending, and that choice is
     # the honest one rather than the flattering one. It is the only estimate on
@@ -1526,7 +1500,7 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
     # rests on something tested. Ranking by the return probability would look
     # more like a stock tip and would be ordering the table by a model that was
     # measured and found not to work.
-    rank_on = "risk_6m" if "risk_6m" in qualified else None
+    rank_on = selected_risk if selected_risk in qualified else None
     if rank_on and qualified[rank_on].notna().any():
         qualified = qualified.sort_values(rank_on, ascending=True,
                                           na_position="last")
@@ -1544,9 +1518,10 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
                                               help=nq.TOOLTIPS["ticker"]),
         "Company": st.column_config.TextColumn(width="medium",
                                                help=nq.TOOLTIPS["company"])}
-    for name in nq.RISK_HORIZONS:
-        if name not in qualified:
-            continue
+    # Only the horizon the reader picked. Showing both put two volatility
+    # columns and two class columns beside a single return column, so the
+    # control at the top of the page governed a third of the table.
+    for name in (selected_risk,) if selected_risk in qualified else ():
         label = 6 if name.endswith("6m") else 12
         # Against the whole cached universe, not the rows on screen. Banding
         # within the selection makes "High" mean something different at a
@@ -1580,7 +1555,8 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
 
     risk_edge = any((m or {}).get("has_edge") for m in risk_models.values())
     return_edge = bool((artifact or {}).get("has_edge", False))
-    note("<strong>Ranked by the 6M volatility forecast, calmest first</strong> "
+    note(f"<strong>Ranked by the {months}M volatility forecast, calmest "
+         f"first</strong> "
          + ("\u2014 the only estimate here that beat chance out of sample. "
             if risk_edge else "\u2014 no estimate here beat chance out of "
             "sample, so the order is for inspection only. ")
@@ -1792,7 +1768,6 @@ def render_portfolio_summary(analysis: dict) -> None:
     columns[1].metric("Typical swing in a year",
                       nq.format_swing(analysis["volatility"]),
                       help=nq.TOOLTIPS["portfolio_swing"])
-    columns[1].caption("a size, never a minus")
     columns[2].metric("Worst drop from a peak",
                       nq.format_percent(analysis["max_drawdown"], 1),
                       help=nq.TOOLTIPS["portfolio_drawdown"])
@@ -1852,13 +1827,6 @@ def render_portfolio_projection(analysis: dict, prices: dict) -> None:
             "Change": f"{position['low_change']:+.0%} to {position['high_change']:+.0%}",
             "Projected Value": f"{nq.format_rupiah(position['low'])} – "
                                f"{nq.format_rupiah(position['high'])}"})
-    if np.isfinite(projection["sum_low"]):
-        rows.append({"Stock": "Those added up",
-                     "Change": f"{projection['sum_low'] / projection['total'] - 1:+.0%} to "
-                               f"{projection['sum_high'] / projection['total'] - 1:+.0%}",
-                     "Projected Value":
-                         f"{nq.format_rupiah(projection['sum_low'])} – "
-                         f"{nq.format_rupiah(projection['sum_high'])}"})
     rows.append({"Stock": "Your portfolio",
                  "Change": f"{projection['low_change']:+.0%} to "
                            f"{projection['high_change']:+.0%}",
@@ -1873,14 +1841,7 @@ def render_portfolio_projection(analysis: dict, prices: dict) -> None:
                      "Projected Value": st.column_config.TextColumn(
                          width="large", help=nq.TOOLTIPS["position_range"])})
 
-    if np.isfinite(projection["overstatement"]):
-        note(f"<strong>Do not add the individual ranges.</strong> All "
-             f"holdings hitting their worst case together is far less likely "
-             f"than any one doing so, so the summed row overstates the "
-             f"downside by "
-             f"{nq.format_rupiah(abs(projection['overstatement']))} "
-             f"({abs(projection['overstatement']) / projection['total']:.0%} "
-             f"of the portfolio). Read the last row.")
+
 
 
 def render_portfolio_risk(analysis: dict, models: dict, controls: dict) -> None:
@@ -1981,10 +1942,22 @@ def render_portfolio_mix(analysis: dict) -> None:
                        f"{closest[2]:.2f}. Loosest: {loosest[0]} and "
                        f"{loosest[1]} at {loosest[2]:.2f}, the pair doing the "
                        f"most work for you.")
-        st.dataframe(correlation.round(2), width="stretch",
-                     column_config={c: st.column_config.NumberColumn(
-                         format="%.2f", help=nq.TOOLTIPS["correlation"])
-                         for c in correlation.columns})
+        # Red at 0, green at 1, through the same hue rotation the trend badge
+        # uses. Note what the colour means here: green marks pairs that move
+        # TOGETHER, which is the direction that diversifies you least. The
+        # scale reads as magnitude, not as good and bad, so the caption says
+        # which is which rather than leaving red and green to imply it.
+        def shade(value: float) -> str:
+            number = nq._to_float(value)
+            if not np.isfinite(number):
+                return ""
+            return (f"background-color:{trend_colour(np.clip(number, 0.0, 1.0))};"
+                    f"color:#FFFFFF")
+
+        st.caption("Green: the pair moves together, which diversifies you "
+                   "least. Red: they move independently.")
+        st.dataframe(correlation.style.map(shade).format("{:.2f}"),
+                     width="stretch")
 
 
 def main() -> None:

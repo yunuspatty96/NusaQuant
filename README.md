@@ -160,11 +160,11 @@ show it. On a six-stock sample the parts swing ±30.3% a year and the portfolio
 swings ±18.8%, and the two banks in it correlate at 0.56 while the least
 related pair sits at 0.10.
 
-The per-position ranges are shown next to their own sum, and the sum is
-crossed against the portfolio's own figure, because a reader shown six ranges
-will add them and the total is wrong: every holding reaching its worst case in
-the same six months is far less likely than any one of them doing so. On that
-sample, adding the parts overstates the downside by about 5% of the portfolio.
+Per-position ranges sit above the portfolio's own. They should not be added:
+every holding reaching its worst case in the same six months is far less
+likely than any one of them doing so, so the parts overstate the whole — on
+that sample by about 5% of the portfolio. The page states the portfolio figure
+and leaves that caution to the tooltip rather than spending three lines on it.
 
 This view replaced Sector Ranking, which listed the same ratios the stock page
 already showed, one sector at a time. A reader who had seen one view had seen

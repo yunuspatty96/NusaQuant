@@ -446,8 +446,9 @@ check("volatility forecast shown",
 check("volatility forecast leads the page", _risk in labels)
 check("both volatility horizons appear",
       "12M High Volatility Probability" in labels, ", ".join(sorted(labels)))
-check("reliability shown", "Machine learning model reliability" in labels)
 check("historical risk still shown", "Worst drop from a peak" in labels)
+check("both risk classes lead the page",
+      {"6M Risk Class", "12M Risk Class"} <= set(labels), ", ".join(sorted(labels)))
 
 # A volatility is a distance and can never be a minus. Printed bare next to a
 # drawdown it reads as a return, which is the confusion the sign exists to end.
@@ -461,9 +462,16 @@ check("the drop is not written as plus-minus",
 
 # The return estimates are demoted, not deleted: a test that found nothing is
 # still a result, and removing it would leave nothing to judge the rest by.
-check("return estimates kept on the page",
-      "Probability of positive return" in labels,
-      ", ".join(sorted(labels)[:6]))
+check("both return horizons kept on the page",
+      {"6M Positive Return Probability",
+       "12M Positive Return Probability"} <= set(labels),
+      ", ".join(sorted(labels)))
+# Return and volatility are laid out the same way, so neither gets more of the
+# page than its evidence supports.
+check("return and volatility read as a matched pair",
+      len([l for l in labels if l.endswith("Positive Return Probability")])
+      == len([l for l in labels if l.endswith("High Volatility Probability")]),
+      ", ".join(sorted(labels)))
 # The feature table is hand-rolled HTML, not st.dataframe: st.dataframe draws
 # onto a canvas whose cells clip long text, and this table is read rather than
 # sorted, so the wrapping matters more than the interactivity.
