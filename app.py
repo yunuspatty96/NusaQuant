@@ -1629,24 +1629,6 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
                    "mode does not fetch here. Switch to the cached snapshot "
                    "to see them filled in.")
 
-    flagged = (qualified[qualified.get("anomaly_flag", False) == True]
-               if "anomaly_flag" in qualified else pd.DataFrame())
-    if not flagged.empty:
-        with st.expander(f"Unusual fundamentals ({len(flagged)})"):
-            note("These companies sit outside the range the models were fitted "
-                 "on, so their estimates are extrapolations rather than "
-                 "recognitions. <strong>This is not a buy or a sell signal</strong> "
-                 "— tested against what followed, the score predicted neither "
-                 "returns nor volatility. It is a prompt to open the filing "
-                 "before trusting a number attached to the company.")
-            st.dataframe(pd.DataFrame({
-                "Ticker": flagged.ticker.to_numpy(),
-                "Company": flagged.company_name.to_numpy(),
-                "Why it stands out": flagged.anomaly_reason.to_numpy()}),
-                width="stretch", hide_index=True, column_config={
-                    "Ticker": st.column_config.TextColumn(width="small"),
-                    "Why it stands out": st.column_config.TextColumn(width="large")})
-
     excluded = screened[~screened.eligible]
     if not excluded.empty:
         with st.expander(f"Excluded by quality gates ({len(excluded)})"):

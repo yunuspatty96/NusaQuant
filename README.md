@@ -208,9 +208,12 @@ happened.
 Volatilities print as ±30.9%. A standard deviation is a distance, never a
 minus, and set bare beside a drawdown of -42.9% it reads as a return.
 
-**Candlestick needs a full bar.** Roughly half the cached companies carry open,
-high and low; the rest carry only a close. The toggle is offered either way and
-says plainly when it has to fall back to the line.
+**Candlestick needs an open.** Measured across the cache, high and low are
+present on essentially every bar for all 31 companies — it is the opening
+price that is sparse, and it is sparse in the way thin trading makes it: 17 of
+31 companies carry an open on fewer than half their bars, and MPRO on a tenth
+of them. The toggle is offered either way and says plainly when it has to fall
+back to the line.
 
 **The projected range is measured, not assumed.** The cone is a volatility
 cone: the stock's own daily volatility over the trailing year, scaled to the
