@@ -1512,6 +1512,121 @@ def screen_features(dataset: pd.DataFrame, features: Sequence[str], horizon: str
     return [f for f in features if f in set(ranked[:keep_at_least])]
 
 
+#: Share of the training panel treated as unusual when the detector is fitted.
+#: Not a claim that 15% of companies are wrong — it is where the boundary is
+#: drawn, and the score matters more than the flag.
+ANOMALY_CONTAMINATION = 0.08
+
+#: Below this many robust deviations, no single ratio is really the reason, and
+#: naming one anyway misleads: AALI was once flagged with "der 1x from normal",
+#: which reads as an accusation against a number that is entirely ordinary. Past
+#: it, one ratio genuinely is the story.
+ANOMALY_REASON_DEVIATIONS = 3.0
+MIN_ANOMALY_TRAINING_ROWS = 60
+
+
+def fit_anomaly(dataset: pd.DataFrame, features: Sequence[str],
+                contamination: float = ANOMALY_CONTAMINATION):
+    """Learn what an ordinary company looks like, so the odd ones stand out.
+
+    An isolation forest, and unsupervised on purpose: there is no label for
+    "unusual", and inventing one would only encode whatever the author already
+    believed. It is chosen over an elliptic envelope because these ratios are
+    not remotely elliptical — a P/S of 21,808 sits beside a median of 3.3 —
+    and over a local outlier factor because scoring new companies against a
+    fixed training set is exactly what a forest does cheaply.
+
+    WHAT THIS IS NOT. It does not forecast. Measured on this panel with the
+    same purged folds everything else uses, the outlier score's within-quarter
+    correlation against the following six months came out at +0.015 for
+    returns and -0.019 for volatility, against a noise floor of about 0.05.
+    Reading a flag here as a buy, a sell, or a risk warning would be reading
+    something that was tested and found to be nothing.
+
+    WHAT IT IS FOR. Every model on this dashboard was fitted on companies whose
+    ratios sit in a normal range, and a company far outside that range is one
+    the model is extrapolating for rather than recognising. That is worth
+    knowing before trusting a probability attached to it, and it is a question
+    about the input rather than about the future — which is why it can be
+    answered honestly when the forecasts cannot.
+    """
+    from sklearn.ensemble import IsolationForest
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import QuantileTransformer
+
+    usable = [f for f in features if f in dataset.columns]
+    frame = dataset[usable].replace([np.inf, -np.inf], np.nan)
+    if len(frame) < MIN_ANOMALY_TRAINING_ROWS or len(usable) < 2:
+        return None
+    pipeline = Pipeline([
+        ("impute", SimpleImputer(strategy="median")),
+        ("rank", QuantileTransformer(n_quantiles=min(25, len(frame)),
+                                     output_distribution="uniform",
+                                     subsample=100_000, random_state=RANDOM_STATE)),
+        ("detect", IsolationForest(n_estimators=300, contamination=contamination,
+                                   random_state=RANDOM_STATE, n_jobs=-1)),
+    ])
+    pipeline.fit(frame)
+    reference = {"features": list(usable),
+                 "median": frame.median().to_dict(),
+                 # Median absolute deviation, scaled so it is comparable with a
+                 # standard deviation on well-behaved data. Robust, because the
+                 # outliers being measured would otherwise inflate the yardstick
+                 # used to measure them.
+                 "mad": ((frame - frame.median()).abs().median() * 1.4826).to_dict()}
+    return {"pipeline": pipeline, "reference": reference}
+
+
+def anomaly_report(model: dict | None, frame: pd.DataFrame) -> pd.DataFrame:
+    """Score rows for how far outside the training distribution they sit.
+
+    Returns a score in [0, 1] — higher is more unusual — the flag, and the
+    single ratio furthest from the training median in robust units, which is
+    the part a reader can act on. "Unusual" alone invites a shrug; "P/S is 6,500
+    times the usual distance from normal" invites opening the filing.
+    """
+    columns = ["anomaly_score", "anomaly_flag", "anomaly_reason"]
+    if not model or frame is None or frame.empty:
+        return pd.DataFrame(columns=columns, index=getattr(frame, "index", None))
+    reference = model["reference"]
+    features = [f for f in reference["features"] if f in frame.columns]
+    if len(features) < 2:
+        return pd.DataFrame(columns=columns, index=frame.index)
+
+    data = frame[reference["features"]].replace([np.inf, -np.inf], np.nan)
+    raw = -model["pipeline"].score_samples(data)
+    # score_samples is unbounded and its scale means nothing to a reader; the
+    # forest's own boundary is 0, so shift and squash around that.
+    score = 1 / (1 + np.exp(-8 * (raw - 0.5)))
+    flag = model["pipeline"].predict(data) == -1
+
+    reasons = []
+    for _, row in data.iterrows():
+        worst, distance, absent = "", 0.0, []
+        for feature in features:
+            spread = _to_float(reference["mad"].get(feature))
+            value = _to_float(row.get(feature))
+            if not np.isfinite(value):
+                absent.append(feature)
+                continue
+            if not np.isfinite(spread) or spread <= 0:
+                continue
+            away = abs(value - _to_float(reference["median"].get(feature))) / spread
+            if away > distance:
+                worst, distance = feature, away
+        if absent:
+            reasons.append(f"{', '.join(absent)} not reported")
+        elif distance >= ANOMALY_REASON_DEVIATIONS:
+            reasons.append(f"{worst} sits {distance:.0f}x the usual distance "
+                           f"from the median")
+        else:
+            reasons.append("unusual combination of ratios, no single outlier")
+
+    return pd.DataFrame({"anomaly_score": score, "anomaly_flag": flag,
+                         "anomaly_reason": reasons}, index=frame.index)
+
+
 def walk_forward_folds(dataset: pd.DataFrame, horizon: str,
                        scheme: str = "date", min_train: int = 40,
                        min_validation: int = 5,
@@ -2587,6 +2702,15 @@ TOOLTIPS: dict[str, str] = {
         "universe. Above 50% means wider swings than average are expected; "
         "below 50% means calmer. It says nothing about direction — a stock "
         "can be turbulent on the way up.",
+    "anomaly":
+        "How far this company's ratios sit outside the range the model was "
+        "fitted on, from 0 to 100. An isolation forest learns what an ordinary "
+        "company looks like across the training panel and scores each company "
+        "against it. A high score does not mean the company is bad, or cheap, "
+        "or risky \u2014 tested against what actually followed, the score "
+        "predicted neither returns nor volatility. It means the model is "
+        "extrapolating rather than recognising, so any probability attached to "
+        "that company deserves less weight and its filing deserves a look.",
     "risk_class":
         "High, Medium or Low, from where this company's volatility forecast "
         "sits among every company on file — the top third, middle third or "
@@ -2779,7 +2903,7 @@ EXPLANATIONS = {
              "fallen from its peaks, and how easily it trades. It describes "
              "what has already happened and carries no promise about what "
              "comes next."),
-    "cone": ("<strong>How to read the shaded range.</strong> It shows how far "
+    "cone": ("<strong>How to read the projected range.</strong> It shows how far "
              "this stock's price could drift over the next 6 and 12 months, "
              "based on how much it has actually moved over the past year. "
              "Hover anywhere inside it to read the range on that date. Half "

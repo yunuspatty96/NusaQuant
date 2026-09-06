@@ -185,7 +185,7 @@ The single-stock page runs in this order:
 | Technical Indicators | RSI and MACD charted over the same window |
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
-| Trading conditions | Position in the 52-week range, volume and movement against the stock's own normal |
+| Market Conditions | A 52-week range strip with today's price marked, plus volume and movement against the stock's own normal |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
 | Risk Analysis | The 6M and 12M volatility forecasts with what each scored, then measured volatility, drawdown, downside volatility and turnover |
@@ -370,6 +370,22 @@ plainly which of its two columns passed a test and which did not. A model cannot
 reassuring label on calibration and consistency alone; those describe a
 well-behaved forecast of the base rate, which is a different claim from a
 signal.
+
+**Anomaly detection answers a question about the input, not the future.** An
+isolation forest is fitted per horizon on the features that horizon's model
+actually reads, and scores each company for how far outside the training range
+it sits. MPRO's P/S is 4,480 robust deviations from the median; SRAJ's P/B is
+42. Those companies get an estimate, but the model is extrapolating for them
+rather than recognising them, and the score says so.
+
+It is deliberately not sold as a signal. Measured on the same purged folds
+everything else uses, the score's within-quarter correlation with the
+following six months came out at +0.015 for returns and -0.019 for volatility,
+against a noise floor near 0.05 — an elliptic envelope and a local outlier
+factor were tried too and landed in the same place. Anomaly detection is a
+familiar-sounding technique that would have been easy to present as a
+stock-picking edge; the tested answer is that it finds unusual filings, which
+is useful, and predicts nothing, which is stated.
 
 **Risk is forecast as well as measured.** Direction of return does not clear
 the gate on this panel; volatility does. "Will this company swing more than

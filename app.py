@@ -936,6 +936,49 @@ def render_technical(technical: dict, window: str) -> None:
         note(nq.EXPLANATIONS["technical"])
 
 
+def render_range_strip(conditions: dict, position: float) -> None:
+    """Where the price sits between its 52-week low and high.
+
+    The number was already on the page as "62% of the range", which is a
+    sentence a reader has to convert into a picture before it means anything.
+    The picture is the thing they wanted, and it is one bar.
+    """
+    low = nq._to_float(conditions.get("low_52w"))
+    high = nq._to_float(conditions.get("high_52w"))
+    last = nq._to_float(conditions.get("last"))
+    if not all(np.isfinite(v) for v in (low, high, last)) or high <= low:
+        return
+
+    figure = go.Figure()
+    figure.add_shape(type="rect", x0=low, x1=high, y0=-0.18, y1=0.18,
+                     fillcolor=GRID, line={"width": 0}, layer="below")
+    # The marker, not a bar from the low: a bar reads as a quantity, and this
+    # is a location.
+    figure.add_trace(go.Scatter(
+        x=[last], y=[0], mode="markers",
+        marker={"size": 15, "color": ACCENT, "symbol": "diamond",
+                "line": {"width": 2, "color": "white"}},
+        hovertemplate=f"Now Rp {last:,.0f}<extra></extra>"))
+    for value, text, anchor in ((low, f"52w low<br>{nq.format_rupiah(low, compact=False)}", "left"),
+                                (high, f"52w high<br>{nq.format_rupiah(high, compact=False)}", "right")):
+        figure.add_annotation(x=value, y=-0.55, text=text, showarrow=False,
+                              xanchor=anchor, font={"size": 11, "color": MUTED})
+    figure.add_annotation(x=last, y=0.62,
+                          text=f"<b>{nq.format_rupiah(last, compact=False)}</b>"
+                               f"<br>{position:.0f}% of range",
+                          showarrow=False, font={"size": 12, "color": ACCENT})
+    span = high - low
+    figure.update_layout(
+        height=130, showlegend=False,
+        margin={"l": 8, "r": 8, "t": 26, "b": 26},
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis={"range": [low - span * 0.12, high + span * 0.12],
+               "visible": False},
+        yaxis={"range": [-1.0, 1.1], "visible": False})
+    st.plotly_chart(figure, width="stretch",
+                    config={**CHART_CONFIG, "staticPlot": True})
+
+
 def render_trading_conditions(prices: pd.DataFrame) -> None:
     """Three descriptive gauges. Deliberately not combined into one score.
 
@@ -957,23 +1000,22 @@ def render_trading_conditions(prices: pd.DataFrame) -> None:
     position = nq._to_float(conditions.get("range_position"))
     volume = nq._to_float(conditions.get("volume_ratio"))
     turbulence = nq._to_float(conditions.get("volatility_ratio"))
-    columns = st.columns(3)
-
-    tile(columns[0], "Position in 52-week range",
-         f"{position:.0f}%" if np.isfinite(position) else "Unavailable",
-         nq.range_band(position), nq.TOOLTIPS["range_position"])
-    tile(columns[1], "Volume vs its own normal",
+    # The strip carries the range position, so the tile that used to state it
+    # as a percentage is gone: the picture and the number said the same thing
+    # a centimetre apart, and the low and high were printed a third time in
+    # the note underneath.
+    render_range_strip(conditions, position)
+    st.caption(nq.range_band(position))
+    columns = st.columns(2)
+    tile(columns[0], "Volume vs its own normal",
          f"{volume:.2f}x" if np.isfinite(volume) else "Unavailable",
          nq.activity_band(volume), nq.TOOLTIPS["volume_ratio"])
-    tile(columns[2], "Movement vs its own normal",
+    tile(columns[1], "Movement vs its own normal",
          f"{turbulence:.2f}x" if np.isfinite(turbulence) else "Unavailable",
          nq.turbulence_band(turbulence), nq.TOOLTIPS["volatility_ratio"])
 
-    note(f"52-week range "
-         f"{nq.format_rupiah(conditions['low_52w'], compact=False)} – "
-         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}. "
-         f"Each reading is against this stock's own past year. None is good "
-         f"or bad on its own.")
+    note("Both readings compare this stock against its own past year. Neither "
+         "is good or bad on its own.")
 
 
 def render_income_chart(company: dict) -> None:
@@ -1197,10 +1239,7 @@ def render_return_forecast(predictions: dict, models: dict) -> None:
             st.caption(f"Tested {auc:.0%} accurate over {folds} periods \u00b7 "
                        f"{reliability.get('label', 'Unknown')}"
                        if np.isfinite(auc) else "Not validated")
-            if not has_edge:
-                st.warning("No measurable edge: it did not rank risers above "
-                           "fallers by more than chance, so the figure is held "
-                           "near the historical base rate.")
+
 
 
 def risk_band(probability: float) -> str:
@@ -1465,6 +1504,7 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             rows.append(record); continue
 
         features = with_price_features(company["features"], company["prices"])
+        record["_features"] = features.iloc[0].to_dict() if len(features) else {}
         result = predict(features, artifact, horizon)
         if result.get("available"):
             record.update({"probability": result["probability"], "eligible": True,
@@ -1536,6 +1576,20 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])
         config[klass] = st.column_config.TextColumn(
             help=nq.TOOLTIPS["risk_class"])
+    # How far outside the training range this company sits, for the features
+    # THIS horizon's model reads. Not a forecast: measured on the same purged
+    # folds, the score's correlation with the following six months came out at
+    # +0.015 for returns and -0.019 for volatility, against a noise floor of
+    # about 0.05. It answers a question about the input, which is why it can be
+    # answered honestly when the forecasts cannot.
+    anomaly = nq.anomaly_report(
+        (artifact or {}).get("anomaly"),
+        pd.DataFrame(list(qualified["_features"]), index=qualified.index))
+    if "anomaly_score" in anomaly:
+        qualified = pd.concat([qualified, anomaly], axis=1)
+        table["Anomaly Score"] = qualified["anomaly_score"].to_numpy() * 100
+        config["Anomaly Score"] = st.column_config.NumberColumn(
+            format="%.0f", help=nq.TOOLTIPS["anomaly"])
     table["Realised Volatility (1Y)"] = qualified.volatility.to_numpy() * 100
     table[return_column] = qualified.probability.to_numpy() * 100
     table["Trend"] = qualified.trend.to_numpy()
@@ -1566,11 +1620,32 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
                "better than a coin toss, so it is shown but not ranked on. ")
             if artifact else "")
          + "Risk Class is the company's position among all companies on "
-           "file, not an absolute scale. Click any heading to re-sort.")
+           "file, not an absolute scale. <em>Anomaly Score</em> flags "
+           "companies whose ratios sit outside the range the models were "
+           "fitted on \u2014 a warning about the input, not a forecast. Click "
+           "any heading to re-sort.")
     if not controls["offline"]:
         st.caption("Volatility columns need daily price history, which live "
                    "mode does not fetch here. Switch to the cached snapshot "
                    "to see them filled in.")
+
+    flagged = (qualified[qualified.get("anomaly_flag", False) == True]
+               if "anomaly_flag" in qualified else pd.DataFrame())
+    if not flagged.empty:
+        with st.expander(f"Unusual fundamentals ({len(flagged)})"):
+            note("These companies sit outside the range the models were fitted "
+                 "on, so their estimates are extrapolations rather than "
+                 "recognitions. <strong>This is not a buy or a sell signal</strong> "
+                 "— tested against what followed, the score predicted neither "
+                 "returns nor volatility. It is a prompt to open the filing "
+                 "before trusting a number attached to the company.")
+            st.dataframe(pd.DataFrame({
+                "Ticker": flagged.ticker.to_numpy(),
+                "Company": flagged.company_name.to_numpy(),
+                "Why it stands out": flagged.anomaly_reason.to_numpy()}),
+                width="stretch", hide_index=True, column_config={
+                    "Ticker": st.column_config.TextColumn(width="small"),
+                    "Why it stands out": st.column_config.TextColumn(width="large")})
 
     excluded = screened[~screened.eligible]
     if not excluded.empty:
@@ -1768,10 +1843,11 @@ def render_portfolio_summary(analysis: dict) -> None:
     columns[1].metric("Typical swing in a year",
                       nq.format_swing(analysis["volatility"]),
                       help=nq.TOOLTIPS["portfolio_swing"])
+    columns[1].caption("the whole portfolio, not the average holding")
     columns[2].metric("Worst drop from a peak",
                       nq.format_percent(analysis["max_drawdown"], 1),
                       help=nq.TOOLTIPS["portfolio_drawdown"])
-    columns[2].caption("if held at these weights throughout")
+    columns[2].caption("if you had never changed the mix")
 
     saved = analysis["diversification_benefit"]
     with st.container(border=True):
