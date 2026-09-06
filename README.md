@@ -374,21 +374,19 @@ reassuring label on calibration and consistency alone; those describe a
 well-behaved forecast of the base rate, which is a different claim from a
 signal.
 
-**Anomaly detection answers a question about the input, not the future.** An
-isolation forest is fitted per horizon on the features that horizon's model
-actually reads, and scores each company for how far outside the training range
-it sits. MPRO's P/S is 4,480 robust deviations from the median; SRAJ's P/B is
-42. Those companies get an estimate, but the model is extrapolating for them
-rather than recognising them, and the score says so.
+**Anomaly detection was built, measured and removed.** An isolation forest
+fitted per horizon on that horizon's model features scored each company for
+how far outside the training range it sat, and it identified real oddities —
+MPRO's P/S is 4,480 robust deviations from the median, SRAJ's P/B is 42.
 
-It is deliberately not sold as a signal. Measured on the same purged folds
+It does not ship, because it does not forecast. On the same purged folds
 everything else uses, the score's within-quarter correlation with the
-following six months came out at +0.015 for returns and -0.019 for volatility,
-against a noise floor near 0.05 — an elliptic envelope and a local outlier
-factor were tried too and landed in the same place. Anomaly detection is a
-familiar-sounding technique that would have been easy to present as a
-stock-picking edge; the tested answer is that it finds unusual filings, which
-is useful, and predicts nothing, which is stated.
+following six months came out at +0.015 for returns and -0.019 for
+volatility, against a noise floor near 0.05; an elliptic envelope and a local
+outlier factor landed in the same place. It is recorded here rather than
+quietly dropped: anomaly detection is a familiar-sounding technique that would
+have been easy to present as an edge, and the tested answer is that on this
+panel it is not one.
 
 **Risk is forecast as well as measured.** Direction of return does not clear
 the gate on this panel; volatility does. "Will this company swing more than

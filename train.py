@@ -1106,11 +1106,6 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
             "n_training_tickers": int(resolved.ticker.nunique()),
             "nusaquant_version": nq.__version__,
         }
-        # Fitted on the features THIS horizon's model reads, so the question
-        # it answers is the useful one: is this company inside the range the
-        # model that scores it was trained on?
-        artifact["anomaly"] = nq.fit_anomaly(resolved, fitted_features)
-
         path = MODELS_DIR / f"model_{horizon}_xgb.joblib"
         joblib.dump(artifact, path)
         exported.append(path.name)

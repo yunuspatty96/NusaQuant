@@ -1504,7 +1504,6 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             rows.append(record); continue
 
         features = with_price_features(company["features"], company["prices"])
-        record["_features"] = features.iloc[0].to_dict() if len(features) else {}
         result = predict(features, artifact, horizon)
         if result.get("available"):
             record.update({"probability": result["probability"], "eligible": True,
@@ -1576,20 +1575,6 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])
         config[klass] = st.column_config.TextColumn(
             help=nq.TOOLTIPS["risk_class"])
-    # How far outside the training range this company sits, for the features
-    # THIS horizon's model reads. Not a forecast: measured on the same purged
-    # folds, the score's correlation with the following six months came out at
-    # +0.015 for returns and -0.019 for volatility, against a noise floor of
-    # about 0.05. It answers a question about the input, which is why it can be
-    # answered honestly when the forecasts cannot.
-    anomaly = nq.anomaly_report(
-        (artifact or {}).get("anomaly"),
-        pd.DataFrame(list(qualified["_features"]), index=qualified.index))
-    if "anomaly_score" in anomaly:
-        qualified = pd.concat([qualified, anomaly], axis=1)
-        table["Anomaly Score"] = qualified["anomaly_score"].to_numpy() * 100
-        config["Anomaly Score"] = st.column_config.NumberColumn(
-            format="%.0f", help=nq.TOOLTIPS["anomaly"])
     table["Realised Volatility (1Y)"] = qualified.volatility.to_numpy() * 100
     table[return_column] = qualified.probability.to_numpy() * 100
     table["Trend"] = qualified.trend.to_numpy()
@@ -1620,10 +1605,7 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
                "better than a coin toss, so it is shown but not ranked on. ")
             if artifact else "")
          + "Risk Class is the company's position among all companies on "
-           "file, not an absolute scale. <em>Anomaly Score</em> flags "
-           "companies whose ratios sit outside the range the models were "
-           "fitted on \u2014 a warning about the input, not a forecast. Click "
-           "any heading to re-sort.")
+           "file, not an absolute scale. Click any heading to re-sort.")
     if not controls["offline"]:
         st.caption("Volatility columns need daily price history, which live "
                    "mode does not fetch here. Switch to the cached snapshot "
