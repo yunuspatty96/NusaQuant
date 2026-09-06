@@ -180,6 +180,15 @@ The cone is deliberately symmetric around the last close. It says how far the
 price might travel, never which way — direction is the probability's job, and
 on this snapshot the probability does that job poorly.
 
+**Only the 50% band is drawn.** The 80% band is correctly calibrated — split by
+volatility, the most volatile quarter of observations saw it catch 74.9% at six
+months against a target of 80%, so it is if anything narrow — but half this
+panel's 12-month 80% ranges span more than five times bottom to top, and MORA's
+spans sixty-five. Shading that would stretch the axis until the price line
+became a flat scratch. It is tabulated instead, and a range wider than five
+times is labelled too broad to act on: an accurate statement about a very
+volatile stock is still a useless one to plan around.
+
 **The technical block is descriptive, never predictive**, and is deliberately
 kept out of the machine learning model. Momentum and volatility were tested as
 model features on this panel and did not earn a place. An arrow points up in

@@ -724,8 +724,13 @@ def render_chart(company: dict, api_key: str,
         last_date = history["date"].iloc[-1]
         future = [last_date + pd.Timedelta(days=int(d * 365 / 252))
                   for d in (0, 126, 252)]
-        for level, shade in ((80, "rgba(29,78,111,.09)"),
-                             (50, "rgba(29,78,111,.20)")):
+        # Only the 50% band is drawn. The 80% band is correctly calibrated —
+        # for the most volatile observations it caught 74.9% at six months
+        # against a target of 80%, so if anything it is narrow — but half this
+        # panel's 12-month 80% ranges span more than five times bottom to top,
+        # and MORA's spans sixty-five. Shading that would stretch the axis
+        # until the price line became a flat scratch. It is tabulated instead.
+        for level, shade in ((50, "rgba(29,78,111,.20)"),):
             upper = [cone["last"]] + [cone["bands"][h][level][1] for h in (126, 252)]
             lower = [cone["last"]] + [cone["bands"][h][level][0] for h in (126, 252)]
             figure.add_trace(go.Scatter(
@@ -807,10 +812,15 @@ def render_technical(technical: dict, window: str) -> None:
         for horizon, label in ((126, "6 months"), (252, "12 months")):
             for level in (50, 80):
                 low, high = cone["bands"][horizon][level]
+                span = high / low if low > 0 else float("inf")
+                wide = level == 80 and cone.get("too_wide", {}).get(horizon)
+                row_class = " class='na'" if wide else ""
+                caveat = (f"<span class='sub'>{span:.0f}x wide &mdash; too broad "
+                          f"to act on</span>" if wide else "")
                 rows.append(
-                    "<tr>"
+                    f"<tr{row_class}>"
                     f"<td><strong>{label}</strong></td>"
-                    f"<td>{level}% of the time</td>"
+                    f"<td>{level}% of the time{caveat}</td>"
                     f"<td class='num'>{escape(nq.format_rupiah(low, compact=False))}"
                     f" &ndash; {escape(nq.format_rupiah(high, compact=False))}</td>"
                     f"<td class='num'>{(high / cone['last'] - 1) * 100:+.0f}% / "
@@ -823,6 +833,12 @@ def render_technical(technical: dict, window: str) -> None:
             "<thead><tr><th>Horizon</th><th>Lands inside</th><th>Price range</th>"
             "<th>Versus today</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>", unsafe_allow_html=True)
+        if any(cone.get("too_wide", {}).values()):
+            note("This stock has moved so much over the past year that the "
+                 "wider range covers almost any outcome. That is an honest "
+                 "reading of how volatile it has been, not a fault in the "
+                 "figure — but it is too broad to plan around, and the shorter "
+                 "horizon is the more useful one here.")
 
     ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
     if np.isfinite(ma50) and np.isfinite(ma200):

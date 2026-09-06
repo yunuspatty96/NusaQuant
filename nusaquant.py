@@ -1422,6 +1422,15 @@ CONE_MULTIPLIERS: dict[int, dict[int, float]] = {
 }
 CONE_LOOKBACK = 252          # one year of daily returns behind each estimate
 
+#: Above this the range stops being information. A band is flagged when its top
+#: is more than five times its bottom — MORA's 12-month 80% range spans 65x,
+#: which is a correctly calibrated statement and a useless one. Coverage by
+#: volatility bucket confirms the width is not an error: for the most volatile
+#: quarter of observations the 80% band actually caught 74.9% at six months and
+#: 84.5% at twelve, so it is not too wide. The stock really does move that much,
+#: and the honest response is to say so rather than to draw it narrower.
+CONE_MAX_USEFUL_SPAN = 5.0
+
 
 def volatility_cone(prices: pd.DataFrame,
                     lookback: int = CONE_LOOKBACK) -> dict[str, Any]:
@@ -1450,11 +1459,15 @@ def volatility_cone(prices: pd.DataFrame,
     cone = {"available": True, "last": last,
             "annual_volatility": daily * math.sqrt(TRADING_DAYS_PER_YEAR),
             "lookback": lookback, "bands": {}}
+    cone["too_wide"] = {}
     for horizon, levels in CONE_MULTIPLIERS.items():
         sigma = daily * math.sqrt(horizon)
         cone["bands"][horizon] = {
             level: (last * math.exp(-k * sigma), last * math.exp(k * sigma))
             for level, k in levels.items()}
+        low, high = cone["bands"][horizon][max(levels)]
+        cone["too_wide"][horizon] = bool(low > 0
+                                         and high / low > CONE_MAX_USEFUL_SPAN)
     return cone
 
 
@@ -2095,8 +2108,10 @@ EXPLANATIONS = {
     "cone": ("<strong>How to read the shaded range.</strong> It shows how far "
              "this stock's price could drift over the next 6 and 12 months, "
              "based on how much it has actually moved over the past year. The "
-             "darker band is where the price ended up about half the time in "
-             "the past; the lighter one about eight times in ten."
+             "shaded area is where the price ended up about half the time in "
+             "the past. The table below adds a wider range that held eight "
+             "times in ten; it is left off the chart because for a volatile "
+             "stock it covers so much ground that it would swamp the price."
              "<br><br><strong>It does not say which way.</strong> The range is "
              "the same size above and below today's price on purpose. Whether "
              "the stock rises or falls is what the probability figures try to "
