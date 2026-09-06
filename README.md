@@ -74,7 +74,7 @@ point-in-time from the cached snapshot at zero credits; the three dividend
 figures are a screener snapshot. Only the scale-free point-in-time ratios are
 machine learning model inputs; the rest are shown because a reader wants them.
 
-| Category | Metrics | In model |
+| Category | Metrics | Model input |
 |---|---|---|
 | Valuation | P/E, P/S, PBV, P/CF, EV/EBITDA | yes |
 | Per Share | EPS, RPS, CPS, BVPS, CFPS | no — rupiah amounts |
