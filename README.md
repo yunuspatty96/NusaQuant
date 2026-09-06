@@ -130,11 +130,24 @@ Three views, chosen in the sidebar.
 **Single Stock Analysis** — one company end to end: profile, price history,
 momentum, trend, income statement and every metric.
 
-**Machine Learning Screening** — every company in the universe with both
-estimates side by side: the turbulence forecast, which passed its test, and
-the return probability, which did not. Nothing is ranked for you. The table
-opens in market-cap order, which asserts nothing, and every column sorts on
-click.
+**Machine Learning Screening** — every company in the universe, ranked, with
+both estimates side by side.
+
+The ranking is on the 6-month volatility forecast, calmest first, and that is
+the honest basis rather than the flattering one: it is the only estimate on
+the page that beat chance out of sample, so it is the only ordering resting on
+something tested. Ranking by the return probability would look more like a
+stock tip while sorting the table by a model that was measured and found not
+to work. Every column sorts on click, so a reader who wants a different order
+can take one.
+
+Each horizon also carries a Risk Class — High, Medium or Low — from where the
+company sits among all companies on file. The band is a position rather than a
+fixed threshold because the model was trained to answer whether a company
+would be more volatile than the *median* company; thresholding the raw
+probability at 0.60 called 20 of 31 companies High, which cannot be true of a
+median split. The comparison group is the whole universe rather than the rows
+on screen, so the band means the same thing at a universe size of 5 as at 31.
 
 **Portfolio Analysis** — enter what you hold, in lots, and the whole thing is
 measured together: value, how much it swings, its deepest fall, a projected
@@ -168,14 +181,14 @@ The single-stock page runs in this order:
 
 | Section | What it is |
 |---|---|
-| Price history | Line or candlestick, MA50/MA200, support and resistance, the projected range, volume beneath |
+| Price history | Line or candlestick, MA20/MA50, support and resistance, the projected range, volume beneath |
 | Technical Indicators | RSI and MACD charted over the same window |
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Trading conditions | Position in the 52-week range, volume and movement against the stock's own normal |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
-| Risk Analysis | The turbulence forecast and what it scored, then measured volatility, drawdown, downside volatility and turnover |
+| Risk Analysis | The 6M and 12M volatility forecasts with what each scored, then measured volatility, drawdown, downside volatility and turnover |
 | Return outlook | The 6- and 12-month probabilities, under a heading that says the test found nothing |
 | Disclaimer | Boxed in red at the foot of every view |
 
@@ -360,9 +373,21 @@ signal.
 
 **Risk is forecast as well as measured.** Direction of return does not clear
 the gate on this panel; volatility does. "Will this company swing more than
-the typical company over six months", scored on the same purged folds against
-the same 0.55 threshold, reaches an out-of-sample ROC-AUC of 0.699 over 8
-folds and 237 rows, and is the only model here with `has_edge` set.
+the typical company", scored on the same purged folds against the same 0.55
+threshold, clears it at both horizons — the only models here with `has_edge`
+set.
+
+| | 6 months | 12 months |
+|---|---:|---:|
+| ROC-AUC | 0.699 | 0.675 |
+| Purged folds | 8 | 4 |
+| Out-of-sample rows | 237 | 118 |
+
+Both ship, each labelled with its own score, and they are not equally well
+established. The 12-month window consumes twice the history and is left with
+half the folds, so its figure rests on much less. Publishing only the stronger
+one would have been the more flattering choice and would have hidden the thing
+a reader most needs in order to weigh them against each other.
 
 Two limits ship with it. Drop trailing volatility from the features and the
 score falls to 0.518, so nearly all of the skill is "volatile stays volatile"

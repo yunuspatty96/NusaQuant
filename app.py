@@ -29,7 +29,7 @@ import math
 import json
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import joblib
 import numpy as np
@@ -125,7 +125,8 @@ CREDITS_PER_COMPANY = QUARTERS_FOR_INFERENCE + 1
 #: the reliability panels, the artifact layout — already speaks that language.
 MODEL_FILES: dict[str, str] = {"6m": "model_6m_xgb.joblib",
                                "12m": "model_12m_xgb.joblib",
-                               "risk": "model_risk_xgb.joblib"}
+                               "risk_6m": "model_risk_6m_xgb.joblib",
+                               "risk_12m": "model_risk_12m_xgb.joblib"}
 
 
 @st.cache_resource(show_spinner=False)
@@ -184,7 +185,8 @@ def predict(features: pd.DataFrame, artifact: dict[str, Any] | None,
     A confident-looking probability built on missing data is worse than none.
     """
     if not artifact:
-        missing = ("No trained risk model was found." if horizon == "risk"
+        missing = ("No trained volatility model was found."
+                   if horizon.startswith("risk")
                    else f"No trained machine learning model for the {horizon} horizon.")
         return {"available": False, "reason": missing}
     model_features = list(artifact.get("feature_names", []))
@@ -597,7 +599,7 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
 # SINGLE STOCK
 # ══════════════════════════════════════════════════════════════════════
 
-def render_profile(company: dict, risk: dict, volatility: float) -> None:
+def render_profile(company: dict, risk: dict, peers: Sequence[float]) -> None:
     ticker, name = company["ticker"], company["name"]
     heading = ticker if name == ticker else f"{ticker} <span>— {name}</span>"
     st.markdown(f"<div class='nq-name'>{heading}</div>", unsafe_allow_html=True)
@@ -626,15 +628,19 @@ def render_profile(company: dict, risk: dict, volatility: float) -> None:
     # because the top of a page is where a reader looks first. The measured
     # volatility is NOT repeated here: two identical numbers in two places is
     # how a reader ends up wondering which one to believe.
+    # The band, not the probability. Risk Analysis further down carries the
+    # figure itself for both horizons, and printing the same number in two
+    # places is how a reader ends up asking which one to believe. What the top
+    # of a page is good for is the one-glance answer.
     if risk.get("available"):
-        columns[2].metric("Chance of bigger swings than average",
-                          f"{risk['probability'] * 100:.0f}%",
-                          help=nq.TOOLTIPS["risk_probability"])
+        columns[2].metric("6M Risk Class",
+                          nq.volatility_class(risk["probability"], peers),
+                          help=nq.TOOLTIPS["risk_class"])
     else:
         # Never a bare dash: an unavailable estimate has a cause, and the cause
         # is more useful than the punctuation.
-        columns[2].metric("Chance of bigger swings than average", "Not available",
-                          help=risk.get("reason", "Risk forecast unavailable."))
+        columns[2].metric("6M Risk Class", "Not available",
+                          help=risk.get("reason", "Volatility forecast unavailable."))
 
     period = company["latest_period"]
     period_text = ("not reported" if pd.isna(period)
@@ -734,12 +740,12 @@ def render_chart(company: dict, api_key: str,
             fill="tozeroy", fillcolor=fill,
             hovertemplate="Rp %{y:,.0f}<extra>Close</extra>"), row=1, col=1)
 
-    # Moving averages are drawn only where they are fully formed. A 200-day
-    # average seeded from 30 days of data is not a 200-day average.
+    # Moving averages are drawn only where they are fully formed. A 50-day
+    # average seeded from 30 days of data is not a 50-day average.
     averages = nq.moving_averages(history)
     # `period`, not `window`: this loop used to shadow the selected price
-    # window, leaving it set to 200 by the time the function returned.
-    for period, colour, dash in ((50, ACCENT, "solid"), (200, MUTED, "dot")):
+    # window, leaving it set to the last average by the time it returned.
+    for period, colour, dash in ((20, ACCENT, "solid"), (50, MUTED, "dot")):
         column = f"ma{period}"
         if column in averages and averages[column].notna().any():
             figure.add_trace(go.Scatter(
@@ -867,34 +873,27 @@ def render_chart(company: dict, api_key: str,
             "<th>Price range</th><th>Versus today</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>", unsafe_allow_html=True)
         if any(cone.get("too_wide", {}).values()):
-            note("This stock has moved so much over the past year that the "
-                 "range covers almost any outcome. That is an honest reading "
-                 "of how volatile it has been, not a fault in the figure — but "
-                 "it is too broad to plan around, and the shorter horizon is "
-                 "the more useful one here.")
+            note("Volatility here is high enough that the 12M range covers "
+                 "almost any outcome. The 6M figure is the usable one.")
 
     change = (last / first - 1.0) if first > 0 else np.nan
-    note(f"Over this window the close moved from "
-         f"{nq.format_rupiah(first, compact=False)} to "
-         f"{nq.format_rupiah(last, compact=False)}, a change of "
-         f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
-         f"there is enough history to form them. Drag across the chart to "
-         f"zoom in, scroll to zoom, double-click to reset.")
+    note(f"{nq.format_rupiah(first, compact=False)} → "
+         f"{nq.format_rupiah(last, compact=False)} "
+         f"({nq.format_percent(change, 1)}) over this window. "
+         f"Drag to zoom, double-click to reset.")
     if any(levels.get(k) for k in ("support", "resistance")):
-        note("<strong>Dashed lines</strong> mark prices this stock has turned "
-             "at before — red above today's price, green below. "
-             + nq.TOOLTIPS["support_resistance"])
+        note("Dashed lines are support (green) and resistance (red).")
     if cone.get("available"):
         note(nq.EXPLANATIONS["cone"])
     elif project:
-        note("A projected range needs a year of daily prices behind it, and "
-             "this company does not have one yet in the snapshot.")
+        note("A projected range needs a year of daily prices. "
+             "This company does not have one yet.")
     return prices, window, technical
 
 
 def render_technical(technical: dict, window: str) -> None:
     """Descriptive trend state. Deliberately kept apart from the model."""
-    section("Technical state")
+    section("Trend & Momentum")
     if not technical.get("available"):
         st.info("Not enough price history in this window to describe a trend.")
         return
@@ -922,12 +921,11 @@ def render_technical(technical: dict, window: str) -> None:
          nq.format_percent(technical.get("return_12m"), 0), None,
          nq.TOOLTIPS["return_12m"])
 
-    ma50, ma200 = nq._to_float(technical.get("ma50")), nq._to_float(technical.get("ma200"))
-    if np.isfinite(ma50) and np.isfinite(ma200):
-        cross = ("above" if ma50 > ma200 else "below")
-        note(f"MA50 is {cross} MA200 "
-             f"({nq.format_rupiah(ma50, compact=False)} versus "
-             f"{nq.format_rupiah(ma200, compact=False)}). "
+    ma20, ma50 = nq._to_float(technical.get("ma20")), nq._to_float(technical.get("ma50"))
+    if np.isfinite(ma20) and np.isfinite(ma50):
+        cross = "above" if ma20 > ma50 else "below"
+        note(f"MA20 {nq.format_rupiah(ma20, compact=False)} is {cross} MA50 "
+             f"{nq.format_rupiah(ma50, compact=False)}. "
              + nq.EXPLANATIONS["technical"])
     else:
         note(nq.EXPLANATIONS["technical"])
@@ -943,7 +941,7 @@ def render_trading_conditions(prices: pd.DataFrame) -> None:
     +0.017. Three separate readings say what is happening without implying
     what happens next.
     """
-    section("Trading conditions")
+    section("Market Conditions")
     conditions = nq.trading_conditions(prices)
     if not conditions.get("available"):
         st.info("A year of daily prices is needed to compare this stock "
@@ -966,22 +964,16 @@ def render_trading_conditions(prices: pd.DataFrame) -> None:
          f"{turbulence:.2f}x" if np.isfinite(turbulence) else "Unavailable",
          nq.turbulence_band(turbulence), nq.TOOLTIPS["volatility_ratio"])
 
-    note(f"Each reading compares this stock against its own past year, not "
-         f"against the market or other companies. Over that year it traded "
-         f"between {nq.format_rupiah(conditions['low_52w'], compact=False)} and "
-         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}."
-         f"<br><br>They are shown separately rather than combined into a single "
-         f"fear-and-greed style score. That score was tested here first and "
-         f"had no useful relationship to what happened next, so publishing one "
-         f"would put a familiar-looking dial on a number that means nothing. "
-         f"None of these three is good or bad on its own: a stock near its "
-         f"high may be running or may be expensive, and heavy trading "
-         f"accompanies panic as often as conviction.")
+    note(f"52-week range "
+         f"{nq.format_rupiah(conditions['low_52w'], compact=False)} – "
+         f"{nq.format_rupiah(conditions['high_52w'], compact=False)}. "
+         f"Each reading is against this stock's own past year. None is good "
+         f"or bad on its own.")
 
 
 def render_income_chart(company: dict) -> None:
     """Revenue against cost against net income, quarter by quarter."""
-    section("Revenue vs Cost vs Net Income")
+    section("Income Statement")
     frame = nq.income_statement_series(company["quarterly"])
     if frame.empty or frame[["revenue", "net_income"]].notna().sum().sum() == 0:
         st.info("The quarterly filings for this company do not carry enough "
@@ -1103,7 +1095,7 @@ def tile(column, label: str, value: str, band: str | None = None,
 
 
 def render_features(company: dict, model_features: list[str]) -> None:
-    section("Fundamental metrics")
+    section("Fundamentals")
     row = company["features"].iloc[0]
     used = set(model_features or [])
 
@@ -1156,48 +1148,24 @@ def render_features(company: dict, model_features: list[str]) -> None:
     modelled = sum(1 for f in nq.FEATURE_SCHEMA if f.modelled)
     as_of = nq.screen_as_of()
     screened = f" taken on {as_of}" if as_of else ""
-    note(f"Values are as reported for the latest available financial period. A "
-         f"high or low reading is not automatically good or bad — the machine "
-         f"learning model "
-         f"weighs these together rather than applying a rule to any single one."
-         f"<br><br><strong>In model</strong> has three states. "
-         f"<em>Yes</em> and <em>No (dropped)</em> apply to the {modelled} "
-         f"ratios the estimate is allowed to read. A ratio is dropped for one "
-         f"of two reasons: too many companies were missing it, or, across the "
-         f"history tested, knowing it did nothing to separate the shares that "
-         f"went on to rise from the ones that did not. A ratio can matter a "
-         f"great deal when you read a single company and still earn no place "
-         f"here, because this table is about ranking companies against each "
-         f"other. <em>Reference</em> is everything measured in rupiah: useful "
-         f"to see, but never fed to the estimate, because a large company is "
-         f"not a better one."
-         f"<br><br><em>Snapshot</em> marks the dividend figures{screened}. "
-         f"They are current readings rather than a history, so they are shown "
-         f"for reference and left out of the estimates."
-         f"<br><br>A dash means the company did not report that figure for the "
-         f"period, or that the ratio would be meaningless — a P/E on a loss "
-         f"is not a cheap stock — and the Meaning column says which. Bank "
-         f"ratios such as NPL and LDR are not shown because the underlying "
-         f"figures are not available here.")
+    note(f"As reported for the latest financial period. <em>In model</em> "
+         f"marks which of the {modelled} ratios the estimate reads. A dash "
+         f"means not reported, or not meaningful for this company \u2014 the "
+         f"Meaning column says which.")
 
 
 def render_return_intro() -> None:
     """Say why the return figures are down here rather than at the top."""
-    section("Return outlook")
-    note("NusaQuant tested whether these fundamentals could predict which way "
-         "a share price would go over six and twelve months. <strong>They could "
-         "not.</strong> Across the periods tested, the estimates below ordered "
-         "risers above fallers no better than a coin toss would have. "
-         "<br><br>They are kept on the page rather than removed, because a test "
-         "that found nothing is still a result, and hiding it would leave you "
-         "with no way to judge the ones that did find something. Read them as "
-         "the historical frequency of a rise in this market, not as a view on "
-         "this company.")
+    section("Return Forecast")
+    note("Tested on past periods, these fundamentals sorted risers above "
+         "fallers <strong>no better than chance</strong>. Kept on the page "
+         "because a negative result is still a result. Read the figures as "
+         "the historical frequency of a rise, not as a view on this company.")
 
 
 def render_prediction(result: dict, artifact: dict | None, horizon: str) -> None:
     months = "6" if horizon == "6m" else "12"
-    section(f"{months}-month outlook")
+    section(f"{months}M Positive Return Probability")
 
     if not result.get("available"):
         st.warning(result.get("reason", "Prediction unavailable."))
@@ -1272,7 +1240,7 @@ def risk_band(probability: float) -> str:
 
 
 def render_risk_analysis(prices: pd.DataFrame, window: str,
-                         risk: dict, artifact: dict | None) -> None:
+                         risks: dict, models: dict, peers: dict) -> None:
     """One section for risk, forecast first and history underneath.
 
     These used to be two things in two places: a descriptive "Historical risk"
@@ -1287,56 +1255,54 @@ def render_risk_analysis(prices: pd.DataFrame, window: str,
     if prices.empty:
         st.info("Risk cannot be measured without price history."); return
 
-    reliability = (artifact or {}).get("reliability", {})
-    metrics = (artifact or {}).get("validation_metrics", {})
-    has_edge = bool((artifact or {}).get("has_edge", False))
+    st.markdown("**Volatility Forecast**")
+    note("Probability this stock is more volatile than the median company over "
+         "the horizon. <strong>Volatility is not direction</strong> — a stock "
+         "can be turbulent while rising.")
 
-    if risk.get("available"):
-        probability = risk["probability"]
-        st.markdown(f"**{risk_band(probability)}** · "
-                    f"{probability * 100:.0f}% chance of bigger swings than average")
-        probability_bar(probability)
-        note("A machine learning model estimates how likely this company is to "
-             "move around more than the typical company in this universe over "
-             "the next six months. <strong>Moving around a lot is not the same "
-             "as going down</strong> — a stock can be turbulent on the way up, "
-             "and this figure says nothing about direction.")
+    shown = False
+    for column, horizon in zip(st.columns(2), ("risk_6m", "risk_12m")):
+        artifact = models.get(horizon)
+        result = risks.get(horizon, {})
+        months = (artifact or {}).get("horizon_months",
+                                      6 if horizon.endswith("6m") else 12)
+        with column:
+            if not result.get("available"):
+                st.metric(f"{months}M High Volatility Probability", "Not available",
+                          help=result.get("reason", "Forecast unavailable."))
+                continue
+            shown = True
+            probability = result["probability"]
+            klass = nq.volatility_class(probability, peers.get(horizon))
+            st.metric(f"{months}M High Volatility Probability",
+                      f"{probability * 100:.0f}%",
+                      help=nq.TOOLTIPS["risk_probability"])
+            st.caption(f"{klass} risk versus the {len(peers.get(horizon, []))} "
+                       f"companies on file")
+            probability_bar(probability)
+            metrics = (artifact or {}).get("validation_metrics", {})
+            auc = nq._to_float(metrics.get("roc_auc"))
+            folds = (artifact or {}).get("validation_folds", "—")
+            reliability = (artifact or {}).get("reliability", {})
+            st.caption(f"Tested {auc:.0%} accurate over {folds} periods · "
+                       f"{reliability.get('label', 'Unknown')}"
+                       if np.isfinite(auc) else "Not validated")
+            if not (artifact or {}).get("has_edge", False):
+                st.warning("Did not beat chance out of sample.")
+    if not shown:
+        st.info("The volatility forecast is unavailable for this company.")
 
-        columns = st.columns(3)
-        auc = nq._to_float(metrics.get("roc_auc"))
-        columns[0].metric("Tested accuracy",
-                          f"{auc:.0%}" if np.isfinite(auc) else "—",
-                          help=nq.TOOLTIPS["risk_validated"])
-        columns[1].metric("Periods tested",
-                          (artifact or {}).get("validation_folds", "—"),
-                          help=nq.TOOLTIPS["folds"])
-        columns[2].metric("Forecast reliability",
-                          reliability.get("label", "Unknown"),
-                          help=nq.TOOLTIPS["risk_forecast_reliability"])
-
-        if has_edge:
-            note("This is the one forecast in NusaQuant that passed its test. "
-                 "Checked on periods it had never seen, it ordered calmer "
-                 "companies below more turbulent ones better than chance would. "
-                 "It is still a weak edge: the accuracy varied a good deal from "
-                 "period to period, and most of what it knows comes from the "
-                 "simple fact that a company that has been moving around lately "
-                 "tends to keep moving around. Read it as a rough ordering.")
-        else:
-            st.warning("This forecast did not beat chance when it was tested on "
-                       "periods it had not seen. The figures below, which "
-                       "describe what has already happened, are the more "
-                       "reliable reading.")
-    elif artifact:
-        st.info(risk.get("reason", "The risk forecast is unavailable for this company."))
-
-    st.markdown("**What has happened so far**")
+    st.markdown("**Historical Risk**")
     years = PRICE_WINDOWS[window]
     measures = nq.risk_metrics(prices, years)
     score = nq.risk_score(measures)
 
     columns = st.columns(5)
-    columns[0].metric("Risk", score["band"], help=nq.TOOLTIPS["risk_band"])
+    # Not "Risk": the forecast band above is also a risk, and two things
+    # under the same word on one page is a question the reader should not
+    # have to answer. This one is a composite of what already happened.
+    columns[0].metric("Composite Risk", score["band"],
+                      help=nq.TOOLTIPS["risk_band"])
     columns[1].metric("Typical swing in a year",
                       nq.format_swing(measures["volatility"]),
                       help=nq.TOOLTIPS["swing_year"])
@@ -1352,10 +1318,7 @@ def render_risk_analysis(prices: pd.DataFrame, window: str,
                       else "Volume not reported",
                       help=nq.TOOLTIPS["turnover"])
     note(f"Measured over {years} year{'s' if years > 1 else ''}. "
-         f"The two figures written with a ± are sizes, not gains or losses: "
-         f"they say how far the price moves, in either direction, and can never "
-         f"be negative. The worst drop can only be negative. "
-         + nq.EXPLANATIONS["risk"])
+         f"± figures are sizes, not gains or losses.")
 
     with st.expander("Drawdown"):
         history = prices.sort_values("date")
@@ -1421,13 +1384,13 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     prices, window, technical = render_chart(
         company, controls["api_key"], controls["offline"])
     features = with_price_features(company["features"], prices)
-    risk = predict(features, models.get("risk"), "risk")
+    risks = {h: predict(features, models.get(h), h) for h in nq.RISK_HORIZONS}
+    risk = risks.get("risk_6m", {})
+    peers = universe_volatility(models)
     predictions = {h: predict(features, models.get(h), h)
                    for h in nq.HORIZON_TRADING_DAYS}
-    volatility = nq.risk_metrics(prices, PRICE_WINDOWS[window])["volatility"]
-
     with profile_slot:
-        render_profile(company, risk, volatility)
+        render_profile(company, risk, peers.get("risk_6m", []))
     if company["n_quarters"] < nq.MIN_QUARTERS_FOR_PREDICTION:
         with quarters_slot:
             st.warning(f"Only {company['n_quarters']} quarterly reports available. "
@@ -1442,7 +1405,7 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     model_features = list((models.get("6m") or {}).get("feature_names", []))
     render_features(company, model_features)
 
-    render_risk_analysis(prices, window, risk, models.get("risk"))
+    render_risk_analysis(prices, window, risks, models, peers)
 
     if not models:
         render_missing_models()
@@ -1481,8 +1444,8 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
                                horizontal=True,
                                label_visibility="collapsed") == "6 Months" else "12m"
     artifact = models.get(horizon)
-    risk_artifact = models.get("risk")
-    if not artifact and not risk_artifact:
+    risk_models = {h: models.get(h) for h in nq.RISK_HORIZONS if models.get(h)}
+    if not artifact and not risk_models:
         st.info("No machine learning model is available."); return
 
     largest = max(5, len(companies))
@@ -1508,9 +1471,15 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
     for index, company_row in enumerate(universe.itertuples(), start=1):
         progress.progress(index / len(universe), text=f"Scoring {company_row.symbol}")
         record = {"ticker": company_row.symbol, "company_name": company_row.company_name,
-                  "probability": np.nan, "risk_probability": np.nan,
-                  "volatility": np.nan, "trend": "Not measured",
-                  "data_quality": 0.0, "eligible": False, "reason": ""}
+                  "probability": np.nan, "volatility": np.nan,
+                  "trend": "Not measured", "data_quality": 0.0,
+                  "eligible": False, "reason": ""}
+        # NOT `for horizon in ...`: that name holds the return horizon the
+        # reader picked, and rebinding it here left it stuck on the last key of
+        # RISK_HORIZONS, so the radio silently did nothing and the return
+        # column was always 12M.
+        for risk_horizon in nq.RISK_HORIZONS:
+            record[risk_horizon] = np.nan
         try:
             company = load_company(company_row.symbol, controls["api_key"],
                                    controls["offline"])
@@ -1531,10 +1500,11 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             record["reason"] = result.get("reason", "unavailable")
             record["data_quality"] = result.get("data_quality", 0.0)
 
-        risk = predict(features, risk_artifact, "risk")
-        if risk.get("available"):
-            record["risk_probability"] = risk["probability"]
-            record["eligible"] = True
+        for name, model in risk_models.items():
+            forecast = predict(features, model, name)
+            if forecast.get("available"):
+                record[name] = forecast["probability"]
+                record["eligible"] = True
         if not company["prices"].empty:
             record["volatility"] = nq.risk_metrics(company["prices"], 1)["volatility"]
             record["trend"] = nq.technical_state(company["prices"]).get(
@@ -1543,71 +1513,88 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
     progress.empty()
 
     screened = pd.DataFrame(rows)
-    qualified = screened[screened.eligible]
+    qualified = screened[screened.eligible].copy()
     if qualified.empty:
         st.error("No company met NusaQuant's minimum data-quality criteria."); return
 
     months = "6" if horizon == "6m" else "12"
-    risk_edge = bool((risk_artifact or {}).get("has_edge", False))
-    return_edge = bool((artifact or {}).get("has_edge", False))
-    swings = f"{months}M positive return"
+    return_column = f"{months}M Positive Return Probability"
 
-    st.markdown(f"#### {len(qualified)} companies")
-    st.caption("Click any column heading to sort by it. Nothing is ranked for "
-               "you, because only one of these two estimates passed its test.")
-    st.dataframe(pd.DataFrame({
-        "Ticker": qualified.ticker.to_numpy(),
-        "Company": qualified.company_name.to_numpy(),
-        "Bigger swings than average": qualified.risk_probability.to_numpy() * 100,
-        "Swing last year": qualified.volatility.to_numpy() * 100,
-        swings: qualified.probability.to_numpy() * 100,
-        "Trend": qualified.trend.to_numpy(),
-        "Data quality": qualified.data_quality.to_numpy() * 100,
-    }), width="stretch", hide_index=True, column_config={
+    # Ranked on the 6-month volatility forecast, ascending, and that choice is
+    # the honest one rather than the flattering one. It is the only estimate on
+    # this page that beat chance out of sample, so it is the only ordering that
+    # rests on something tested. Ranking by the return probability would look
+    # more like a stock tip and would be ordering the table by a model that was
+    # measured and found not to work.
+    rank_on = "risk_6m" if "risk_6m" in qualified else None
+    if rank_on and qualified[rank_on].notna().any():
+        qualified = qualified.sort_values(rank_on, ascending=True,
+                                          na_position="last")
+    qualified = qualified.reset_index(drop=True)
+    qualified["Rank"] = np.arange(1, len(qualified) + 1)
+
+    reference = universe_volatility(models)
+    table = {"Rank": qualified["Rank"].to_numpy(),
+             "Ticker": qualified.ticker.to_numpy(),
+             "Company": qualified.company_name.to_numpy()}
+    config = {
+        "Rank": st.column_config.NumberColumn(width="small",
+                                              help=nq.TOOLTIPS["rank"]),
         "Ticker": st.column_config.TextColumn(width="small",
                                               help=nq.TOOLTIPS["ticker"]),
-        "Company": st.column_config.TextColumn(width="large",
-                                               help=nq.TOOLTIPS["company"]),
-        "Bigger swings than average": st.column_config.NumberColumn(
-            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"]),
-        "Swing last year": st.column_config.NumberColumn(
+        "Company": st.column_config.TextColumn(width="medium",
+                                               help=nq.TOOLTIPS["company"])}
+    for name in nq.RISK_HORIZONS:
+        if name not in qualified:
+            continue
+        label = 6 if name.endswith("6m") else 12
+        # Against the whole cached universe, not the rows on screen. Banding
+        # within the selection makes "High" mean something different at a
+        # universe size of 5 than at 31, and with a handful of rows the
+        # terciles are decided by the count rather than by the companies.
+        peers = reference.get(name) or qualified[name].dropna().tolist()
+        probability = f"{label}M High Volatility Probability"
+        klass = f"{label}M Risk Class"
+        table[probability] = qualified[name].to_numpy() * 100
+        table[klass] = [nq.volatility_class(v, peers) for v in qualified[name]]
+        config[probability] = st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])
+        config[klass] = st.column_config.TextColumn(
+            help=nq.TOOLTIPS["risk_class"])
+    table["Realised Volatility (1Y)"] = qualified.volatility.to_numpy() * 100
+    table[return_column] = qualified.probability.to_numpy() * 100
+    table["Trend"] = qualified.trend.to_numpy()
+    table["Data Quality"] = qualified.data_quality.to_numpy() * 100
+    config.update({
+        "Realised Volatility (1Y)": st.column_config.NumberColumn(
             format="\u00b1%.1f%%", help=nq.TOOLTIPS["swing_year"]),
-        swings: st.column_config.NumberColumn(
+        return_column: st.column_config.NumberColumn(
             format="%.0f%%", help=nq.TOOLTIPS["probability"]),
         "Trend": st.column_config.TextColumn(help=nq.TOOLTIPS["trend"]),
-        "Data quality": st.column_config.NumberColumn(
+        "Data Quality": st.column_config.NumberColumn(
             format="%.0f%%", help=nq.TOOLTIPS["data_quality"])})
 
-    inputs = len(((artifact or risk_artifact) or {}).get("feature_names", []))
-    tested = nq._to_float(((risk_artifact or {}).get("validation_metrics") or {})
-                          .get("roc_auc"))
-    folds = (risk_artifact or {}).get("validation_folds", 0)
-    risk_line = (f"passed its test: over {folds} periods it had never seen it was "
-                 f"right about {tested:.0%} of the time. It is still a weak edge, "
-                 f"and it says nothing about direction \u2014 a company can be "
-                 f"turbulent while rising. "
-                 if risk_edge else "did not pass its test on this snapshot. ")
-    return_line = ("carries a measurable edge on this snapshot. " if return_edge else
-                   "<strong>did not pass its test.</strong> Over the periods "
-                   "checked it sorted risers above fallers no better than chance, "
-                   "so sorting by that column orders the table by something that "
-                   "was not shown to work. It is here so you can see what was "
-                   "tested, not as a shortlist. ")
-    note(f"<strong>The two estimates are not equally good, and that difference "
-         f"matters more than either number.</strong>"
-         f"<br><br><em>Bigger swings than average</em> {risk_line}"
-         f"<br><br><em>{swings}</em> {return_line}"
-         f"<br><br><em>Swing last year</em> and <em>Trend</em> come from price "
-         f"history alone, with no model involved. <em>Data quality</em> is the "
-         f"share of the {inputs} inputs actually present for that company this "
-         f"period; NusaQuant refuses to score a company below "
-         f"{nq.MIN_DATA_COMPLETENESS:.0%}, and those appear under "
-         f"<em>Excluded by quality gates</em> instead.")
+    st.markdown(f"#### {len(qualified)} companies ranked")
+    st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True,
+                 column_config=config)
 
+    risk_edge = any((m or {}).get("has_edge") for m in risk_models.values())
+    return_edge = bool((artifact or {}).get("has_edge", False))
+    note("<strong>Ranked by the 6M volatility forecast, calmest first</strong> "
+         + ("\u2014 the only estimate here that beat chance out of sample. "
+            if risk_edge else "\u2014 no estimate here beat chance out of "
+            "sample, so the order is for inspection only. ")
+         + ("The return probability "
+            + ("also passed its test. " if return_edge else
+               "<strong>did not</strong>: it sorted risers above fallers no "
+               "better than a coin toss, so it is shown but not ranked on. ")
+            if artifact else "")
+         + "Risk Class is the company's position among all companies on "
+           "file, not an absolute scale. Click any heading to re-sort.")
     if not controls["offline"]:
-        st.caption("The swing and turbulence columns need daily price history, "
-                   "which live mode does not fetch here. Switch to the cached "
-                   "snapshot to see them filled in.")
+        st.caption("Volatility columns need daily price history, which live "
+                   "mode does not fetch here. Switch to the cached snapshot "
+                   "to see them filled in.")
 
     excluded = screened[~screened.eligible]
     if not excluded.empty:
@@ -1639,6 +1626,38 @@ def portfolio_prices(tickers: list[str], api_key: str,
         if frame is not None and not frame.empty:
             out[ticker] = frame
     return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _universe_volatility(horizons: tuple[str, ...]) -> dict[str, list[float]]:
+    """Forecast volatility for every cached company, for the class bands.
+
+    The bands are positions within a peer group, so they need a peer group. The
+    cached snapshot is the natural one: it is the same universe the model was
+    trained on, it costs nothing, and it does not shift when a reader changes
+    which company they are looking at.
+    """
+    models, _ = load_models()
+    out: dict[str, list[float]] = {h: [] for h in horizons}
+    for ticker in snapshot_tickers():
+        prices = snapshot_data(ticker, "prices")
+        quarterly = snapshot_data(ticker, "quarterly")
+        if prices.empty or quarterly.empty:
+            continue
+        latest = prices.sort_values("date").iloc[-1]
+        frame = nq.features_frame(quarterly, nq._to_float(latest.get("market_cap")),
+                                  nq._to_float(latest.get("close")))
+        frame = with_price_features(frame, prices)
+        for horizon in horizons:
+            result = predict(frame, models.get(horizon), horizon)
+            if result.get("available"):
+                out[horizon].append(result["probability"])
+    return out
+
+
+def universe_volatility(models: dict) -> dict[str, list[float]]:
+    available = tuple(h for h in nq.RISK_HORIZONS if models.get(h))
+    return _universe_volatility(available) if available else {}
 
 
 def render_holdings_editor(companies: pd.DataFrame, controls: dict) -> dict[str, float]:
@@ -1705,9 +1724,9 @@ def render_portfolio(companies: pd.DataFrame, models: dict, controls: dict) -> N
     it only exists between them.
     """
     section(MODE_PORTFOLIO)
-    note("Enter what you hold and NusaQuant will measure the whole thing: how "
-         "much it swings, how far it could travel, and how much of its "
-         "movement your holdings share rather than offset.")
+    note("Enter your holdings in lots. NusaQuant measures the portfolio as "
+         "one position: volatility, drawdown, projected range and "
+         "correlation.")
 
     holdings = render_holdings_editor(companies, controls)
     if not holdings:
@@ -1781,14 +1800,12 @@ def render_portfolio_summary(analysis: dict) -> None:
 
     saved = analysis["diversification_benefit"]
     with st.container(border=True):
-        st.markdown("**Diversification: what mixing them saved you**")
-        note(f"Add up each holding's own swing, weighted by how much you hold, "
-             f"and you get {nq.format_swing(analysis['undiversified_volatility'])} "
-             f"a year. The portfolio actually swings "
-             f"{nq.format_swing(analysis['volatility'])}, because they do not "
-             f"all fall on the same days. That gap of "
-             f"{abs(saved) * 100:.1f} points is the whole argument for holding "
-             f"more than one thing.")
+        st.markdown("**Diversification**")
+        note(f"Weighted average of the parts is "
+             f"{nq.format_swing(analysis['undiversified_volatility'])}; the "
+             f"portfolio is {nq.format_swing(analysis['volatility'])}. The "
+             f"{abs(saved) * 100:.1f}-point gap is the diversification "
+             f"benefit.")
         for label, value, colour in (
                 ("Each one alone", analysis["undiversified_volatility"], NEGATIVE),
                 ("Held together", analysis["volatility"], POSITIVE)):
@@ -1811,7 +1828,7 @@ def render_portfolio_summary(analysis: dict) -> None:
 
 
 def render_portfolio_projection(analysis: dict, prices: dict) -> None:
-    section("Projected range")
+    section("Projected Range")
     months = st.radio("Horizon", ["6 months", "12 months"], horizontal=True,
                       label_visibility="collapsed")
     horizon = 126 if months == "6 months" else 252
@@ -1820,129 +1837,140 @@ def render_portfolio_projection(analysis: dict, prices: dict) -> None:
         st.info("A year of price history is needed before a range can be drawn.")
         return
 
-    note("Built from how much each holding has actually moved over the past "
-         "year, stretched to the horizon and calibrated against what really "
-         "happened. It says how far the value might travel, not which way.")
+    note("A calibrated volatility cone: trailing volatility scaled to the "
+         "horizon. It bounds how far the value may travel, not which way.")
 
     rows = []
     for position in projection["positions"]:
         ticker = position["ticker"]
         if not position.get("available"):
             rows.append({"Stock": ticker, "Change": "—",
-                         "Your position could sit": "not enough history"})
+                         "Projected Value": "not enough history"})
             continue
         rows.append({
             "Stock": ticker,
             "Change": f"{position['low_change']:+.0%} to {position['high_change']:+.0%}",
-            "Your position could sit": f"{nq.format_rupiah(position['low'])} – "
-                                       f"{nq.format_rupiah(position['high'])}"})
+            "Projected Value": f"{nq.format_rupiah(position['low'])} – "
+                               f"{nq.format_rupiah(position['high'])}"})
     if np.isfinite(projection["sum_low"]):
         rows.append({"Stock": "Those added up",
                      "Change": f"{projection['sum_low'] / projection['total'] - 1:+.0%} to "
                                f"{projection['sum_high'] / projection['total'] - 1:+.0%}",
-                     "Your position could sit":
+                     "Projected Value":
                          f"{nq.format_rupiah(projection['sum_low'])} – "
                          f"{nq.format_rupiah(projection['sum_high'])}"})
     rows.append({"Stock": "Your portfolio",
                  "Change": f"{projection['low_change']:+.0%} to "
                            f"{projection['high_change']:+.0%}",
-                 "Your position could sit": f"{nq.format_rupiah(projection['low'])} – "
-                                            f"{nq.format_rupiah(projection['high'])}"})
+                 "Projected Value": f"{nq.format_rupiah(projection['low'])} – "
+                                    f"{nq.format_rupiah(projection['high'])}"})
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
                  column_config={
                      "Stock": st.column_config.TextColumn(width="small",
                                                           help=nq.TOOLTIPS["ticker"]),
                      "Change": st.column_config.TextColumn(
                          help=nq.TOOLTIPS["position_range"]),
-                     "Your position could sit": st.column_config.TextColumn(
+                     "Projected Value": st.column_config.TextColumn(
                          width="large", help=nq.TOOLTIPS["position_range"])})
 
     if np.isfinite(projection["overstatement"]):
-        note(f"<strong>The individual ranges do not add up, and should not be "
-             f"added.</strong> Every holding reaching its worst case in the "
-             f"same {months} is far less likely than any one of them doing so, "
-             f"so the row above the total overstates your downside by "
-             f"{nq.format_rupiah(abs(projection['overstatement']))} — about "
-             f"{abs(projection['overstatement']) / projection['total']:.0%} of "
-             f"the portfolio. The last row is the one to read.")
+        note(f"<strong>Do not add the individual ranges.</strong> All "
+             f"holdings hitting their worst case together is far less likely "
+             f"than any one doing so, so the summed row overstates the "
+             f"downside by "
+             f"{nq.format_rupiah(abs(projection['overstatement']))} "
+             f"({abs(projection['overstatement']) / projection['total']:.0%} "
+             f"of the portfolio). Read the last row.")
 
 
 def render_portfolio_risk(analysis: dict, models: dict, controls: dict) -> None:
-    section("Which holdings are likely to move around most")
-    artifact = models.get("risk")
+    section("Volatility Forecast")
+    horizons = {h: models.get(h) for h in nq.RISK_HORIZONS if models.get(h)}
     rows = []
     for ticker in analysis["tickers"]:
-        record = {"Stock": ticker,
-                  "Swing last year": analysis["each_volatility"][ticker] * 100,
-                  "Chance of bigger swings than average": np.nan}
-        if artifact is not None:
+        record = {"Ticker": ticker,
+                  "Realised Volatility (1Y)": analysis["each_volatility"][ticker] * 100}
+        for name in horizons:
+            record[name] = np.nan
+        if horizons:
             try:
                 company = load_company(ticker, controls["api_key"], controls["offline"])
-                features = with_price_features(company["features"],
-                                               company["prices"])
-                result = predict(features, artifact, "risk")
-                if result.get("available"):
-                    record["Chance of bigger swings than average"] = (
-                        result["probability"] * 100)
+                features = with_price_features(company["features"], company["prices"])
+                for name, artifact in horizons.items():
+                    result = predict(features, artifact, name)
+                    if result.get("available"):
+                        record[name] = result["probability"] * 100
             except nq.SectorsAPIError:
                 pass
         rows.append(record)
 
-    frame = pd.DataFrame(rows).sort_values("Chance of bigger swings than average",
-                                           ascending=False, na_position="last")
-    metrics = (artifact or {}).get("validation_metrics", {})
-    auc = nq._to_float(metrics.get("roc_auc"))
-    if artifact is not None and np.isfinite(auc):
-        note(f"A machine learning model estimates the chance each holding swings "
-             f"more than the typical company over the next six months. Tested on "
-             f"{(artifact or {}).get('validation_folds', 0)} past periods it was "
-             f"right about {auc:.0%} of the time — a real edge, but a weak one, "
-             f"so read these as a rough ordering rather than a number to rely "
-             f"on. <strong>Moving around a lot is not the same as going "
-             f"down.</strong>")
-    st.dataframe(frame, width="stretch", hide_index=True, column_config={
-        "Stock": st.column_config.TextColumn(width="small",
-                                             help=nq.TOOLTIPS["ticker"]),
-        "Swing last year": st.column_config.NumberColumn(
-            format="±%.1f%%", help=nq.TOOLTIPS["swing_year"]),
-        "Chance of bigger swings than average": st.column_config.NumberColumn(
-            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])})
+    frame = pd.DataFrame(rows)
+    reference = universe_volatility(models)
+    table = {"Ticker": frame["Ticker"].to_numpy()}
+    config = {"Ticker": st.column_config.TextColumn(width="small",
+                                                    help=nq.TOOLTIPS["ticker"])}
+    for name in horizons:
+        months = 6 if name.endswith("6m") else 12
+        probability = f"{months}M High Volatility Probability"
+        klass = f"{months}M Risk Class"
+        peers = reference.get(name) or (frame[name].dropna() / 100).tolist()
+        table[probability] = frame[name].to_numpy()
+        table[klass] = [nq.volatility_class(v / 100 if v == v else v, peers)
+                        for v in frame[name]]
+        config[probability] = st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"])
+        config[klass] = st.column_config.TextColumn(help=nq.TOOLTIPS["risk_class"])
+    table["Realised Volatility (1Y)"] = frame["Realised Volatility (1Y)"].to_numpy()
+    config["Realised Volatility (1Y)"] = st.column_config.NumberColumn(
+        format="\u00b1%.1f%%", help=nq.TOOLTIPS["swing_year"])
+
+    ordered = pd.DataFrame(table)
+    lead = next((c for c in ordered.columns if "High Volatility" in c), None)
+    if lead:
+        ordered = ordered.sort_values(lead, ascending=False, na_position="last")
+    note("Probability each holding is more volatile than the median company. "
+         "Risk Class is its position among all companies on file. "
+         "<strong>Volatility is not direction.</strong>")
+    st.dataframe(ordered, width="stretch", hide_index=True, column_config=config)
 
 
 def render_portfolio_mix(analysis: dict) -> None:
-    section("Sector mix")
+    section("Sector Proportion")
     sectors: dict[str, float] = {}
     for ticker, weight in analysis["weight"].items():
         name = nq.company_classification(ticker).get("sector") or "Not classified"
         sectors[name] = sectors.get(name, 0.0) + weight
     ordered = sorted(sectors.items(), key=lambda kv: -kv[1])
 
-    figure = go.Figure()
-    for name, weight in ordered:
-        figure.add_bar(x=[weight * 100], y=["mix"], orientation="h", name=name,
-                       hovertemplate=f"{name}: %{{x:.1f}}%<extra></extra>")
-    figure.update_layout(barmode="stack", height=110, showlegend=True,
-                         margin={"l": 0, "r": 0, "t": 4, "b": 0},
-                         plot_bgcolor="white", paper_bgcolor="white",
-                         legend={"orientation": "h", "y": -0.4},
-                         xaxis={"range": [0, 100], "ticksuffix": "%",
-                                "gridcolor": GRID},
-                         yaxis={"visible": False})
+    # A horizontal bar per sector rather than one stacked bar. Stacking put
+    # every label inside its own slice, and a slice worth 3% is narrower than
+    # the text it holds, so the percentages were clipped by whatever sat next
+    # to them. One row each gives every label the full width to sit in.
+    figure = go.Figure(go.Bar(
+        x=[weight * 100 for _, weight in ordered],
+        y=[name for name, _ in ordered], orientation="h",
+        marker={"color": ACCENT},
+        text=[f"{weight:.1%}" for _, weight in ordered],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="%{y}: %{x:.1f}%<extra></extra>"))
+    figure.update_layout(
+        height=max(150, 40 * len(ordered)), showlegend=False,
+        margin={"l": 0, "r": 60, "t": 8, "b": 8},
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis={"range": [0, max(w for _, w in ordered) * 118],
+               "ticksuffix": "%", "gridcolor": GRID},
+        yaxis={"autorange": "reversed", "ticksuffix": "  "})
     st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
     top_two = sum(w for _, w in ordered[:2])
     largest_ticker = max(analysis["weight"], key=analysis["weight"].get)
-    note(f"The two largest sectors hold {top_two:.0%} of your money, and your "
-         f"biggest single position, {largest_ticker}, is "
-         f"{analysis['weight'][largest_ticker]:.0%} of it. Concentration is not "
-         f"automatically a mistake — it is only worth knowing before the next "
-         f"time that part of the market moves.")
+    note(f"Top two sectors: {top_two:.0%}. Largest position: "
+         f"{largest_ticker} at {analysis['weight'][largest_ticker]:.0%}.")
 
-    with st.expander("How closely they move together"):
+    with st.expander("Correlation Matrix"):
         correlation = analysis["correlation"]
-        note("1.00 would mean two stocks move in perfect step; 0 means knowing "
-             "one tells you nothing about the other. Two holdings with a high "
-             "figure diversify you less than their number suggests.")
+        note("1.00 is perfect lockstep, 0 is unrelated. High pairs "
+             "diversify you less than their count suggests.")
         pairs = [(a, b, float(correlation.loc[a, b]))
                  for i, a in enumerate(correlation.columns)
                  for b in correlation.columns[i + 1:]]

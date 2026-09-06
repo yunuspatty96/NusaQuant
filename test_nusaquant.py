@@ -439,14 +439,15 @@ at.session_state["ticker"] = TICKERS[0]; at.session_state["analysed"] = TICKERS[
 at.run()
 check("single stock renders", not at.exception, str(at.exception)[:300] if at.exception else "")
 labels = {m.label: m.value for m in at.metric}
-_risk = "Chance of bigger swings than average"
+_risk = "6M High Volatility Probability"
 _swing = "Typical swing in a year"
-check("risk forecast shown", labels.get(_risk, "Not available") != "Not available",
-      str(labels.get(_risk)))
-check("risk forecast leads the page", _risk in labels and _swing in labels)
+check("volatility forecast shown",
+      labels.get(_risk, "Not available") != "Not available", str(labels.get(_risk)))
+check("volatility forecast leads the page", _risk in labels)
+check("both volatility horizons appear",
+      "12M High Volatility Probability" in labels, ", ".join(sorted(labels)))
 check("reliability shown", "Machine learning model reliability" in labels)
 check("historical risk still shown", "Worst drop from a peak" in labels)
-check("forecast reliability shown", "Forecast reliability" in labels)
 
 # A volatility is a distance and can never be a minus. Printed bare next to a
 # drawdown it reads as a return, which is the confusion the sign exists to end.
@@ -498,26 +499,54 @@ if _screen:
     check("screening runs offline", not at.exception,
           str(at.exception)[:300] if at.exception else "")
     _tables = [d.value for d in at.dataframe
-               if "Bigger swings than average" in list(d.value.columns)]
+               if "6M High Volatility Probability" in list(d.value.columns)]
     check("screening table produced", len(_tables) > 0,
           str([list(d.value.columns) for d in at.dataframe])[:200])
     if _tables:
         _table = _tables[0]
         # Percentages held as text sort 9% above 53%, and a sortable table that
         # sorts wrongly is worse than one that does not sort at all.
-        _numeric = ["Bigger swings than average", "Swing last year",
-                    "Data quality"]
+        _numeric = ["6M High Volatility Probability",
+                    "Realised Volatility (1Y)", "Data Quality"]
         check("sortable columns are numeric, not text",
               all(str(_table[c].dtype).startswith("float") for c in _numeric
                   if c in _table),
               str({c: str(_table[c].dtype) for c in _numeric if c in _table}))
-        # Nothing may arrive pre-ranked by an estimate that failed its test.
+        # Every column a reader could mistake for a return must say what the
+        # number is. "6M" alone reads as a return; "Probability" says it is not.
+        check("probability columns name themselves",
+              all("Probability" in c for c in _table.columns
+                  if c.startswith(("6M", "12M"))
+                  and "Risk Class" not in c),
+              ", ".join(_table.columns))
+        # The ranking must rest on the estimate that passed its test, not on
+        # the one that did not.
+        check("ranked ascending by the validated forecast",
+              list(_table["Rank"]) == sorted(_table["Rank"])
+              and _table["6M High Volatility Probability"].is_monotonic_increasing,
+              str(list(_table["6M High Volatility Probability"])[:5]))
         _return_column = next((c for c in _table.columns
-                               if "positive return" in c), None)
+                               if "Positive Return" in c), None)
         if _return_column and len(_table) > 2:
             _values = [v for v in _table[_return_column] if v == v]
-            check("the table is not pre-ranked by the return estimate",
+            check("not ranked by the return estimate",
                   _values != sorted(_values, reverse=True), str(_values[:5]))
+        # The horizon control has to actually control something. A loop
+        # variable named `horizon` once overwrote the reader's choice, so the
+        # radio moved and the table never did.
+        _hz = [r for r in at.radio if r.label == "Return horizon"]
+        if _hz:
+            _before = next(c for c in _table.columns if "Positive Return" in c)
+            _hz[0].set_value("12 Months").run()
+            [b for b in at.button if "screen" in (b.label or "").lower()][0].click().run()
+            _after = next(c for c in at.dataframe[0].value.columns
+                          if "Positive Return" in c)
+            check("the horizon control changes the return column",
+                  _before.startswith("6M") and _after.startswith("12M"),
+                  f"{_before} then {_after}")
+        check("risk classes are banded",
+              set(_table["6M Risk Class"]) <= {"High", "Medium", "Low", "Unknown"},
+              str(set(_table["6M Risk Class"])))
 
 # ── Portfolio analysis: entering, removing, and measuring together ──────
 radio(at, "Analysis").set_value(appmod.MODE_PORTFOLIO).run()

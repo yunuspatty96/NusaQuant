@@ -77,7 +77,7 @@ python train.py
 Sekitar 5–10 menit. Tunggu sampai muncul:
 
 ```
-Exported: model_6m_xgb.joblib, model_12m_xgb.joblib, model_risk_xgb.joblib + metadata.json
+Exported: model_6m_xgb.joblib, model_12m_xgb.joblib, model_risk_6m_xgb.joblib, model_risk_12m_xgb.joblib + metadata.json
 Re-running costs NOTHING — every company is cached.
 ```
 
@@ -128,7 +128,7 @@ Narasi di aplikasi ditulis untuk pembaca — investor dan peneliti dari yang san
 
 Tiga tampilan tersedia di sidebar: **Single Stock Analysis**, **Machine Learning Screening**, dan **Portfolio Analysis**.
 
-Di Single Stock Analysis, angka utama sekarang adalah prakiraan risiko (satu-satunya model yang lolos ujinya), sedangkan probabilitas return turun ke bawah dengan label jujurnya.
+Di Single Stock Analysis, angka utama sekarang adalah kelas risiko dari prakiraan volatilitas — satu-satunya model yang lolos ujinya, dan tersedia untuk 6 dan 12 bulan. Probabilitas return turun ke bawah dengan label jujurnya. Machine Learning Screening memeringkat seluruh universe berdasarkan prakiraan volatilitas 6 bulan, dari yang paling tenang.
 
 Angkanya akan berkumpul rapat di sekitar base rate historis (sekitar 50% untuk
 6M, 58% untuk 12M). Itu memang disengaja — lihat bagian terakhir dokumen ini.

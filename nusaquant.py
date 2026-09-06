@@ -1266,8 +1266,18 @@ def add_targets(observations: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFram
 # top of the one number. And the reliability score still lands on Weak, because
 # the fold-to-fold variance is large. It is a real edge and a small one.
 
-RISK_HORIZON_DAYS = 126              # six months, in trading days
+#: Both horizons, in trading days. The 12-month window eats far more history
+#: than the 6-month one and the difference shows in the result rather than
+#: being smoothed over: 6M scores 0.699 across 8 folds, 12M 0.564 across 4.
+#: Both ship, each labelled with its own tested accuracy, because a reader
+#: comparing them should be able to see that one is much better established.
+RISK_HORIZONS: dict[str, int] = {"risk_6m": 126, "risk_12m": 252}
 MIN_RISK_CROSS_SECTION = 8           # companies needed before a quarter can rank
+
+#: Bands come from position within the peer group rather than from a second
+#: model. The probability is already the output of something that passed a
+#: test; wrapping a clustering step around it would add a layer that nothing
+#: validated, to sort numbers that are already sorted.
 
 #: Deliberately excludes size, turnover and illiquidity. Those score higher —
 #: illiquidity reaches an IC of +0.22 — but this universe is the largest
@@ -1324,7 +1334,7 @@ def add_price_features(observations: pd.DataFrame,
 
 def add_risk_target(observations: pd.DataFrame,
                     prices: pd.DataFrame) -> pd.DataFrame:
-    """Realised volatility over the six months AFTER each observation.
+    """Realised volatility over the months AFTER each observation.
 
     This is the thing being predicted, so unlike every other column it reads
     forward on purpose. It stays NaN until the window has fully closed; a
@@ -1338,18 +1348,18 @@ def add_risk_target(observations: pd.DataFrame,
     total = len(close)
     result = observations.copy()
 
-    forward = []
-    for position in result["price_index"].to_numpy(dtype=int):
-        end = position + RISK_HORIZON_DAYS
-        if end >= total:
-            forward.append(np.nan); continue
-        window = close[position:end + 1]
-        returns = np.diff(np.log(np.clip(window, 1e-9, None)))
-        returns = returns[np.isfinite(returns)]
-        forward.append(float(np.std(returns, ddof=1)
-                             * math.sqrt(TRADING_DAYS_PER_YEAR))
-                       if len(returns) > 2 else np.nan)
-    result["forward_volatility"] = forward
+    for name, days in RISK_HORIZONS.items():
+        forward = []
+        for position in result["price_index"].to_numpy(dtype=int):
+            end = position + days
+            if end >= total:
+                forward.append(np.nan); continue
+            returns = np.diff(np.log(np.clip(close[position:end + 1], 1e-9, None)))
+            returns = returns[np.isfinite(returns)]
+            forward.append(float(np.std(returns, ddof=1)
+                                 * math.sqrt(TRADING_DAYS_PER_YEAR))
+                           if len(returns) > 2 else np.nan)
+        result[f"forward_volatility_{name}"] = forward
     return result
 
 
@@ -1362,19 +1372,57 @@ def add_risk_labels(dataset: pd.DataFrame) -> pd.DataFrame:
     calm. Ranking inside the quarter removes the market-wide regime and leaves
     the part that is about the company.
     """
-    if dataset.empty or "forward_volatility" not in dataset.columns:
+    if dataset.empty:
         return dataset
     result = dataset.copy()
-    grouped = result.groupby("observation_date")["forward_volatility"]
-    median, count = grouped.transform("median"), grouped.transform("count")
-    result["target_risk"] = np.where(
-        result.forward_volatility.notna() & (count >= MIN_RISK_CROSS_SECTION),
-        (result.forward_volatility > median).astype(float), np.nan)
-    # walk_forward_folds purges on when a target resolves, so it needs the date
-    # this one did. Six months of trading days after the observation.
-    result["target_available_risk"] = (result["observation_date"]
-                                       + pd.Timedelta(days=int(RISK_HORIZON_DAYS * 7 / 5)))
+    for name, days in RISK_HORIZONS.items():
+        column = f"forward_volatility_{name}"
+        if column not in result.columns:
+            continue
+        grouped = result.groupby("observation_date")[column]
+        median, count = grouped.transform("median"), grouped.transform("count")
+        result[f"target_{name}"] = np.where(
+            result[column].notna() & (count >= MIN_RISK_CROSS_SECTION),
+            (result[column] > median).astype(float), np.nan)
+        # walk_forward_folds purges on when a target resolves, so it needs the
+        # date this one did: that many trading days after the observation.
+        result[f"target_available_{name}"] = (
+            result["observation_date"] + pd.Timedelta(days=int(days * 7 / 5)))
     return result
+
+
+def volatility_class(probability: Any, reference: Sequence[float] | None = None,
+                     lower: float = 1 / 3, upper: float = 2 / 3) -> str:
+    """High, Medium or Low volatility, judged against the peers on screen.
+
+    Bands are positions within ``reference``, not fixed cut-offs on the
+    probability, and the reason is the target's own definition. The model
+    predicts whether a company will be MORE volatile than the median company
+    that quarter, so by construction about half of any cross-section belongs
+    above the line. Thresholding the raw probability at 0.60 called 20 of 31
+    companies High, which cannot be true of a median split and would have
+    handed a reader a category that contradicts the thing it came from.
+
+    Ranking is also what the model was trained to do. It was never asked to
+    place a company on an absolute volatility scale, so reading its output as
+    one asks it a question it was not scored on.
+
+    Without a reference the probability is compared against itself, which
+    yields Medium — honest, if useless. Callers pass the universe on screen.
+    """
+    value = _to_float(probability)
+    if not np.isfinite(value):
+        return "Unknown"
+    peers = [v for v in np.asarray(reference if reference is not None else [],
+                                   dtype=float).ravel() if np.isfinite(v)]
+    if len(peers) < 3:
+        return "Medium"
+    position = float(np.mean(np.asarray(peers) <= value))
+    if position >= upper:
+        return "High"
+    if position <= lower:
+        return "Low"
+    return "Medium"
 
 
 def build_dataset(frames) -> pd.DataFrame:
@@ -1607,7 +1655,7 @@ def risk_metrics(prices: pd.DataFrame, window_years: int = 1) -> dict[str, float
     }
 
 
-def moving_averages(prices: pd.DataFrame, windows=(50, 200)) -> pd.DataFrame:
+def moving_averages(prices: pd.DataFrame, windows=(20, 50)) -> pd.DataFrame:
     """Close plus one column per moving-average window, indexed by date."""
     if prices is None or prices.empty or "close" not in prices.columns:
         return pd.DataFrame()
@@ -2090,8 +2138,12 @@ def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
         return empty
 
     last = float(close.iloc[-1])
+    # MA20 against MA50, not MA50 against MA200. The slower pair needs 200
+    # sessions before it says anything, and a third of this universe has not
+    # traded that long — AADI listed in December 2024, EMAS in September 2025 —
+    # so the trend for those companies was permanently "Insufficient history".
+    ma20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else np.nan
     ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else np.nan
-    ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else np.nan
     peak = float(close.rolling(min(252, len(close))).max().iloc[-1])
 
     def change(offset: int) -> float:
@@ -2099,14 +2151,13 @@ def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
             return np.nan
         return float(last / close.iloc[-1 - offset] - 1.0)
 
-    # Four states, not three. Price above its 50-day but below its 200-day, and
-    # price below its 50-day but above its 200-day, are both "neither trend" —
-    # and collapsing them into one bucket loses the only interesting thing
-    # about either. On this snapshot fifteen of nineteen tickers sit in the
-    # first case, a market that fell hard and is bouncing; calling all of them
-    # "sideways" said nothing, and calling them "recovering" says what happened.
-    short = last > ma50 if np.isfinite(ma50) else None
-    long = last > ma200 if np.isfinite(ma200) else None
+    # Four states, not three. Price above its 20-day but below its 50-day, and
+    # price below its 20-day but above its 50-day, are both "neither trend" —
+    # collapsing them into one bucket loses the only interesting thing about
+    # either. Calling both "sideways" says nothing; "recovering" and
+    # "weakening" say which way the shorter average is pulling.
+    short = last > ma20 if np.isfinite(ma20) else None
+    long = last > ma50 if np.isfinite(ma50) else None
     if short is None and long is None:
         trend = "Insufficient history"
     elif short is None or long is None:
@@ -2123,7 +2174,7 @@ def technical_state(prices: pd.DataFrame) -> dict[str, Any]:
 
     return {
         "available": True,
-        "last": last, "ma50": ma50, "ma200": ma200,
+        "last": last, "ma20": ma20, "ma50": ma50,
         "rsi14": relative_strength_index(close),
         **macd(close),
         "from_52w_high": (last / peak - 1.0) if peak > 0 else np.nan,
@@ -2535,6 +2586,15 @@ TOOLTIPS: dict[str, str] = {
         "universe. Above 50% means wider swings than average are expected; "
         "below 50% means calmer. It says nothing about direction — a stock "
         "can be turbulent on the way up.",
+    "risk_class":
+        "High, Medium or Low, from where this company's volatility forecast "
+        "sits among every company on file — the top third, middle third or "
+        "bottom third. The comparison group is always the full universe, so "
+        "the band means the same thing however few companies you are looking "
+        "at. It is a position among peers, not an absolute scale, "
+        "because the model was trained to answer whether a company would be "
+        "more volatile than the median company, not to place it on a fixed "
+        "volatility ladder.",
     "risk_validated":
         "How the risk forecast scored when it was tested on periods it had not "
         "seen. Each past quarter was predicted using only what was known "
