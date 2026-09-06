@@ -56,10 +56,10 @@
   "snapshot_as_of": "2026-06-30",
   "validation": {
     "6m": {
-      "model": "xgb_depth2",
-      "shrinkage_weight": 0.3,
+      "model": "xgb_depth1",
+      "shrinkage_weight": 0.15,
       "folds": 9,
-      "roc_auc": 0.49911300003491266,
+      "roc_auc": 0.5148480132793858,
       "reliability": "No measurable edge",
       "has_edge": false
     },
@@ -67,7 +67,7 @@
       "model": "xgb_depth1",
       "shrinkage_weight": 0.05,
       "folds": 5,
-      "roc_auc": 0.48616071428571433,
+      "roc_auc": 0.4866071428571429,
       "reliability": "No measurable edge",
       "has_edge": false
     }

@@ -190,16 +190,19 @@ Buka panel **Diagnostics** di aplikasi. Ia menyebutkan penyebabnya:
 
 ## Yang perlu Anda tahu sebelum demo
 
-Dengan snapshot 25 saham saat ini, **kedua horizon melaporkan "No measurable
+Dengan snapshot 31 saham saat ini, **kedua horizon melaporkan "No measurable
 edge"** — bukan sekadar "Weak".
 
 | | 6M | 12M |
 |---|---:|---:|
 | Fold walk-forward (di-purge) | 9 | 5 |
-| Baris out-of-sample | 217 | 120 |
-| ROC-AUC (rata-rata di dalam fold) | 0.521 | 0.498 |
+| Baris out-of-sample | 266 | 147 |
+| ROC-AUC (rata-rata di dalam fold) | 0.515 | 0.487 |
 | Baseline (selalu menebak prior) | 0.500 | 0.500 |
-| Mengalahkan baseline? | tidak | tidak |
+| Mengalahkan baseline (log loss)? | ya, selisih 0.0019 | tidak |
+
+Selisih 0.0019 itu sengaja tidak dirayakan: angkanya lebih kecil daripada
+`LOG_LOSS_TIE`, ambang yang di tempat lain sudah dianggap "tidak berbeda".
 
 Itu bukan bug, dan bukan pula sesuatu yang disembunyikan. Aplikasi:
 
@@ -213,14 +216,24 @@ Itu bukan bug, dan bukan pula sesuatu yang disembunyikan. Aplikasi:
 **Kenapa, dan apa yang akan mengubahnya.** Target model adalah tanda dari
 *absolute return*, dan dalam 6–12 bulan tanda itu sebagian besar ditentukan
 arah pasar, bukan perusahaannya — base rate per kuartal di panel ini berkisar
-dari 0.00 sampai 1.00. Selain itu, 25 saham berarti setiap cross-section
-kuartalan hanya selebar 25 titik. Yang membatasi adalah **lebar universe**,
-bukan algoritmanya. Kalau Anda punya kredit lebih, tambah jumlah saham lebih
-dulu — itu jauh lebih berpengaruh daripada menambah riwayat untuk nama yang
-sama:
+dari 0.00 sampai 1.00.
+
+Yang membatasi sekarang adalah **presisi pengukuran, bukan algoritmanya**.
+Dengan 9 fold, standard error ROC-AUC 6M sekitar 0.043, sehingga selang 95%
+di sekitar 0.515 membentang kira-kira 0.43–0.60 dan masih melewati ambang
+0.55. Artinya eksperimennya belum mampu menjawab apakah edge itu ada.
+
+Sebagai gambaran betapa tipisnya semua ini: menaikkan ambang IC dari 0.05 ke
+0.06 saja menggeser skor 6M dari 0.542 ke 0.515.
+
+Menambah jumlah saham sudah dicoba dan tidak menolong: panel tumbuh
+15 → 19 → 22 → 25 → 31 perusahaan, dan ROC-AUC 6M out-of-sample bergerak
+0.470, 0.483, 0.516, 0.521, 0.499. Yang menambah jumlah fold — dan karena itu
+menambah presisi — adalah **riwayat kuartal yang lebih panjang**, bukan nama
+yang lebih banyak:
 
 ```bash
-python train.py --budget 3000 --companies 50
+python train.py --budget 3000 --quarters 32
 ```
 
 Metodologi: validasi walk-forward yang di-purge per tanggal rebalance, audit
@@ -232,7 +245,14 @@ memberi nilai pada model yang tidak bisa memeringkat.
 Fitur: 27 metrik dalam 7 kategori. 24 dihitung point-in-time dari cache tanpa
 kredit; 3 metrik dividen berasal dari screener dan **tidak pernah masuk model**
 karena bukan data point-in-time. Hanya 11 rasio bebas-skala yang boleh menjadi
-input model, dan gate missingness menyisakan 6 di antaranya. NPL, LDR dan NIM
+input model, gate missingness menyisakan 6 di antaranya, lalu **screening
+information coefficient** membuang rasio yang tidak punya daya memeringkat.
+
+Screening itu di-fit ulang di dalam setiap fold, memakai baris training saja.
+Melakukan screening sekali di seluruh panel lalu menuliskan pemenangnya secara
+hardcode memang menghasilkan angka yang terlihat lebih baik, tapi tidak ada
+artinya: rasionya dipilih memakai return yang nanti dipakai untuk menilai model
+itu sendiri. NPL, LDR dan NIM
 tidak ada karena endpoint quarterly tidak mengembalikan field yang dibutuhkan.
 
 Ketika melakukan training kembali, cache yang lama tetap dipakai — Anda hanya membayar API credit untuk saham yang baru.

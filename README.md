@@ -338,31 +338,67 @@ high probability of a positive return can still be violently volatile.
 
 ## What the current snapshot actually measures
 
-On the shipped 25-ticker snapshot, **neither horizon has a measurable edge**:
+On the shipped 31-ticker snapshot, **neither horizon has a measurable edge**:
 
 | | 6M | 12M |
 |---|---:|---:|
 | Purged folds | 9 | 5 |
-| Out-of-sample rows | 217 | 120 |
-| ROC-AUC (mean within fold) | 0.521 | 0.498 |
+| Out-of-sample rows | 266 | 147 |
+| ROC-AUC (mean within fold) | 0.515 | 0.487 |
 | Baseline ROC-AUC | 0.500 | 0.500 |
-| Beats the prior-only baseline on log loss | no | no |
+| Beats the prior-only baseline on log loss | yes, by 0.0019 | no |
 | Reliability | No measurable edge | No measurable edge |
 
 That is reported, not hidden. The dashboard labels both horizons, shrinks the
-probabilities to within about two points of the base rate, and warns on the
-ranking view.
+probabilities to within a few points of the base rate, and warns on the
+ranking view. The 6M log-loss win is left in the table rather than celebrated:
+0.0019 is smaller than `LOG_LOSS_TIE`, the margin this project already refuses
+to read as a difference anywhere else.
 
-**Why, and what would change it.** The target is the sign of an absolute
-return, and over 6–12 months that sign is mostly the market's, not the
-company's — the per-quarter base rate in this panel runs from 0.00 to 1.00, and
-cross-sectional fundamentals carry no information about the market's own
-direction. On top of that, twenty-five tickers means each quarterly
-cross-section is twenty-five points wide. The binding constraint is the **width of the universe**,
-not the algorithm: every model tried, linear and tree, on fundamentals, on
-zero-credit price features, and on both, landed between 0.40 and 0.53
-out of sample. Widening the universe adds far more effective sample than adding
-history to the same names.
+**Feature screening, and why it is done inside each fold.** Ratios that rank
+nothing are dropped before training. The screen keeps a ratio when its
+information coefficient — the within-quarter Spearman correlation against the
+return that followed, averaged over quarters — clears `MIN_FEATURE_IC`.
+
+The screen is refitted on the training rows of every fold, which is the whole
+point of it. Screening once on the full panel and hardcoding the winners scores
+*better* on this data and is worth nothing: the ratios would have been chosen
+using the returns the model is then graded against. That was measured rather
+than assumed, and the honest version is not the flattering one: screening
+inside each fold is the only version whose score a live market could reproduce.
+
+`MIN_FEATURE_IC` is set from the panel's own noise floor rather than from the
+literature. Hand this measurement a column of random numbers and it does not
+return zero — on a cross-section this narrow it returns |IC| near 0.05, with a
+95th percentile around 0.13 (400 permutations). The bar sits just above that
+median, so it removes ratios that are visibly worse than noise; it does not
+certify the survivors as signal. Of six ratios, only NPM and ROE clear the 95th
+percentile of the noise distribution at six months, and that is before any
+correction for having examined six.
+
+How little of this is resolvable is itself worth stating: moving the bar from
+0.05 to 0.06 moved the 6M score from 0.542 to 0.515. A 0.01 change in a
+threshold should not move a result by 0.027. That it does is the same finding
+as everything else on this page — the panel is too small for the measurement
+to hold still.
+
+**Why the edge is still absent, and what would change it.** The target is the
+sign of an absolute return, and over 6–12 months that sign is mostly the
+market's, not the company's — the per-quarter base rate in this panel runs from
+0.00 to 1.00, and cross-sectional fundamentals carry no information about the
+market's own direction.
+
+The constraint is now **measurement precision, not the algorithm**. With 9
+folds the standard error on the 6M ROC-AUC is about 0.043, so the 95% interval
+around 0.542 runs from roughly 0.46 to 0.63 and straddles the 0.55 gate: the
+experiment cannot yet resolve whether the edge exists. Every intervention
+tested — feature screening, `scale_pos_weight`, a 24-point hyperparameter
+grid, a peer-relative target — moved the score by less than that standard
+error, and threshold choices inside those interventions move it by as much as
+the interventions themselves. Widening the universe was tried and did not help
+either: the panel grew 15 → 19 → 22 → 25 → 31 companies and 6M
+out-of-sample ROC-AUC went 0.470, 0.483, 0.516, 0.521, 0.499. **More quarters per company**, not more
+companies, is what buys additional folds and therefore additional precision.
 
 ## Limitations
 

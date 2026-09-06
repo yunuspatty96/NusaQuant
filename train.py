@@ -402,8 +402,39 @@ MODEL_CANDIDATES: dict[str, Any] = {
 # the ordering defined while the spread stays around a couple of percentage
 # points, which is the honest visual statement that it has little to say. The
 # log-loss cost of the floor is in the fourth decimal.
+# Two ways to decide what the model reads, evaluated against each other on the
+# same purged folds rather than settled by argument. "all" hands over every
+# ratio that survived the missingness gate. "screened" additionally drops the
+# ratios with no information coefficient — refitted inside each fold's training
+# window, so the screen never sees the quarter it is about to be scored on.
+#
+# Screening on the full panel first and hardcoding the winners would report a
+# better number and be worthless: the ratios would have been picked using the
+# returns the model is then graded against. The whole point of doing it this
+# way is that the figure survives contact with a market that has not happened.
+FEATURE_POLICIES: dict[str, Any] = {
+    "all": None,
+    "screened": lambda frame, features, horizon: nq.screen_features(
+        frame, features, horizon),
+}
+
 SHRINKAGE_FLOOR = 0.05
 SHRINKAGE_GRID = np.round(np.arange(SHRINKAGE_FLOOR, 1.0001, 0.05), 2)
+
+# And a ceiling, for the case the floor does not cover. The weight is fitted on
+# log loss, but log loss on a panel this close to balanced is mostly a test of
+# calibration: a model can lower it by tracking how each quarter's base rate
+# drifts, while ranking the stocks inside that quarter no better than a coin.
+# Spreading probabilities across thirty points is a claim about ranking, and
+# ranking is what ROC-AUC measures and what MIN_EDGE_AUC gates.
+#
+# Without this ceiling the 6M model shipped a 0.50 weight off a log-loss win of
+# 0.0032 over the baseline — smaller than LOG_LOSS_TIE, the margin this file
+# already refuses to read as a difference — and the dashboard would have shown
+# one stock at 32% and another at 60% under a label reading "no measurable
+# edge, read as the historical base rate". Whatever that display is, it is not
+# what the validation found.
+NO_EDGE_SHRINKAGE_CAP = 0.15
 
 # Log losses closer together than this are a tie, not a ranking.
 LOG_LOSS_TIE = 0.005
@@ -450,12 +481,17 @@ def score(y_true, y_prob) -> dict:
 
 
 def walk_forward(dataset: pd.DataFrame, features, horizon: str,
-                 factory=None) -> dict:
+                 factory=None, selector=None) -> dict:
     """Purged expanding-window validation. Never a random split.
 
     A random train/test split on a financial panel lets the model see future
     market regimes, which is how a backtest ends up looking excellent and
     failing live.
+
+    ``selector``, when given, chooses the features for a fold from that fold's
+    TRAINING rows alone. It is re-run for every fold precisely so that a screen
+    fitted on early quarters is judged on later ones, which is the only way the
+    resulting score means anything.
 
     ``factory`` builds a fresh, unfitted estimator per fold; the default is the
     prior-only baseline. Each out-of-sample row is returned alongside the fold
@@ -474,10 +510,13 @@ def walk_forward(dataset: pd.DataFrame, features, horizon: str,
         y_train = train[target].astype(int)
         if y_train.nunique() < 2:
             continue
+        fold_features = list(features)
+        if selector is not None:
+            fold_features = selector(train, features, horizon) or list(features)
         estimator = factory()
         try:
-            estimator.fit(train[features], y_train)
-            probability = estimator.predict_proba(validate[features])[:, 1]
+            estimator.fit(train[fold_features], y_train)
+            probability = estimator.predict_proba(validate[fold_features])[:, 1]
         except Exception as exc:
             fold_rows.append({"validation_year": fold["validation_year"],
                               "error": str(exc)[:120]})
@@ -485,6 +524,8 @@ def walk_forward(dataset: pd.DataFrame, features, horizon: str,
         y_validate = validate[target].astype(int)
         fold_rows.append({"validation_year": fold["validation_year"],
                           "n_train": fold["n_train"], "n_validation": fold["n_validation"],
+                          "n_features": len(fold_features),
+                          "features": ", ".join(fold_features),
                           **score(y_validate, probability)})
         oof_rows.append(pd.DataFrame({"fold": fold["validation_year"],
                                       "prior": float(y_train.mean()),
@@ -573,10 +614,11 @@ def fit_shrinkage(oof: pd.DataFrame) -> tuple[float, pd.DataFrame]:
     return best_weight(oof), honest
 
 
-def evaluate_candidate(dataset, features, horizon, name) -> dict:
+def evaluate_candidate(dataset, features, horizon, name, policy="all") -> dict:
     """Validate one candidate, then re-score it under honest shrinkage."""
     result = walk_forward(dataset, features, horizon,
-                          factory=lambda: build_model(name, weight=1.0))
+                          factory=lambda: build_model(name, weight=1.0),
+                          selector=FEATURE_POLICIES[policy])
     if not result.get("available"):
         return result
     weight, honest = fit_shrinkage(result["oof"])
@@ -588,7 +630,8 @@ def evaluate_candidate(dataset, features, horizon, name) -> dict:
     shrunk["pr_auc_pooled"] = shrunk.get("pr_auc")
     for key in ("roc_auc", "pr_auc", "roc_auc_std", "n_folds", "n_folds_scored"):
         shrunk[key] = result["metrics"].get(key)
-    result.update({"name": name, "shrinkage_weight": weight,
+    result.update({"name": name, "feature_policy": policy,
+                   "shrinkage_weight": weight,
                    "metrics_raw": result["metrics"], "metrics": shrunk,
                    "oof": honest})
     return result
@@ -608,34 +651,73 @@ def choose_model(dataset, features, horizon, baseline: dict) -> dict:
     A candidate that cannot beat the prior-only baseline on log loss is
     reported as such rather than dressed up; the export still happens, at a
     shrinkage that keeps it within a couple of points of that baseline.
+
+    Each model is entered twice, once on every usable ratio and once on the
+    in-fold screen, which doubles the candidate field. That is a real cost:
+    pick the best of eight on the same folds and the winner's margin is
+    flattered by the picking. Two things keep it contained. Ties are broken
+    toward the unscreened entry, so the screen has to earn its place rather
+    than win a coin toss; and the reliability gate is unmoved by any of this,
+    because a field of eight noisy candidates still cannot manufacture an
+    ROC-AUC above MIN_EDGE_AUC out of a panel that has no signal in it.
     """
     baseline_loss = nq._to_float((baseline.get("metrics") or {}).get("log_loss"))
     scored = []
     for name in MODEL_CANDIDATES:
-        result = evaluate_candidate(dataset, features, horizon, name)
-        if not result.get("available"):
-            continue
-        loss = nq._to_float(result["metrics"].get("log_loss"))
-        auc = nq._to_float(result["metrics"].get("roc_auc"))
-        scored.append((loss if np.isfinite(loss) else np.inf,
-                       -(auc if np.isfinite(auc) else 0.0), name, result))
+        for policy in FEATURE_POLICIES:
+            result = evaluate_candidate(dataset, features, horizon, name, policy)
+            if not result.get("available"):
+                continue
+            loss = nq._to_float(result["metrics"].get("log_loss"))
+            auc = nq._to_float(result["metrics"].get("roc_auc"))
+            scored.append((loss if np.isfinite(loss) else np.inf,
+                           -(auc if np.isfinite(auc) else 0.0),
+                           0 if policy == "all" else 1, name, policy, result))
     if not scored:
         return {"available": False, "reason": "no candidate produced predictions"}
 
-    scored.sort(key=lambda row: (row[0], row[1]))
+    scored.sort(key=lambda row: (row[0], row[1], row[2]))
     best_loss = scored[0][0]
     tied = [row for row in scored if row[0] <= best_loss + LOG_LOSS_TIE]
-    _, _, name, chosen = min(tied, key=lambda row: row[1])
+    chosen = min(tied, key=lambda row: (row[1], row[2]))[5]
     chosen["leaderboard"] = [
-        {"model": n, "log_loss": (None if not np.isfinite(l) else l),
+        {"model": n, "features": pol, "log_loss": (None if not np.isfinite(l) else l),
          "roc_auc": -a, "shrinkage_weight": r["shrinkage_weight"],
          "reliability": nq.reliability(r["metrics"], baseline.get("metrics"))["score"]}
-        for l, a, n, r in scored]
+        for l, a, _, n, pol, r in scored]
+
+    chosen["reliability"] = nq.reliability(chosen["metrics"], baseline.get("metrics"))
+    if (not chosen["reliability"]["has_edge"]
+            and chosen["shrinkage_weight"] > NO_EDGE_SHRINKAGE_CAP):
+        chosen = _cap_shrinkage(chosen, baseline, NO_EDGE_SHRINKAGE_CAP)
 
     chosen_loss = nq._to_float(chosen["metrics"].get("log_loss"))
     chosen["beats_baseline"] = bool(np.isfinite(chosen_loss) and np.isfinite(baseline_loss)
                                     and chosen_loss < baseline_loss)
-    chosen["reliability"] = nq.reliability(chosen["metrics"], baseline.get("metrics"))
+    return chosen
+
+
+def _cap_shrinkage(chosen: dict, baseline: dict, cap: float) -> dict:
+    """Hold an edgeless model closer to the base rate, and re-score it there.
+
+    Re-scored, not relabelled. The log loss and Brier reported after this are
+    the ones the capped weight actually produces, which are slightly worse than
+    the fitted weight's — that is the honest price of the cap and it is paid in
+    the numbers rather than hidden. Rank quality carries across untouched:
+    blending toward a per-fold constant is monotone inside a fold, so it cannot
+    reorder anything and the ROC-AUC is unchanged by construction.
+    """
+    oof = chosen["oof"].copy()
+    oof["y_prob_shrunk"] = _blend(oof, cap)
+    oof["weight_used"] = cap
+    capped = score(oof.y_true, oof.y_prob_shrunk)
+    capped["roc_auc_pooled"] = capped.get("roc_auc")
+    capped["pr_auc_pooled"] = capped.get("pr_auc")
+    for key in ("roc_auc", "pr_auc", "roc_auc_std", "n_folds", "n_folds_scored"):
+        capped[key] = chosen["metrics"].get(key)
+    chosen.update({"shrinkage_weight": float(cap), "metrics": capped, "oof": oof,
+                   "shrinkage_capped": True})
+    chosen["reliability"] = nq.reliability(capped, baseline.get("metrics"))
     return chosen
 
 
@@ -844,16 +926,19 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
         print(f"  {horizon}: {n_folds} purged folds, {metrics['n']} out-of-sample rows")
         for row in chosen["leaderboard"]:
             loss = row["log_loss"]
-            print(f"        {row['model']:<19} log-loss "
+            print(f"        {row['model'] + ' / ' + row['features']:<30} log-loss "
                   f"{'   —  ' if loss is None else f'{loss:.4f}'} · "
                   f"AUC {row['roc_auc']:.3f} · shrinkage {row['shrinkage_weight']:.2f}")
-        print(f"        {'baseline (prior)':<19} log-loss "
+        print(f"        {'baseline (prior)':<30} log-loss "
               f"{base_loss:.4f} · AUC {base_auc:.3f}")
 
         verdict = ("beats the prior-only baseline" if chosen["beats_baseline"]
                    else "does NOT beat the prior-only baseline")
-        print(f"    -> {chosen['name']} selected, shrinkage "
-              f"{chosen['shrinkage_weight']:.2f}, {verdict}")
+        policy = chosen.get("feature_policy", "all")
+        print(f"    -> {chosen['name']} on {policy} features selected, shrinkage "
+              f"{chosen['shrinkage_weight']:.2f}"
+              + (" (capped: no measurable edge)" if chosen.get("shrinkage_capped")
+                 else "") + f", {verdict}")
         print(f"       AUC {metrics['roc_auc']:.3f} (raw, before shrinkage "
               f"{chosen['metrics_raw']['roc_auc']:.3f}) · Brier {metrics['brier']:.4f} "
               f"· reliability {chosen['reliability']['label']} "
@@ -865,15 +950,35 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
 
         estimator = build_model(chosen["name"], weight=chosen["shrinkage_weight"])
         resolved = dataset.dropna(subset=[f"target_{horizon}"])
-        estimator.fit(resolved[features], resolved[f"target_{horizon}"].astype(int))
+        # The shipped model is fitted on every resolved row, so its screen is
+        # allowed to read every resolved row too. That is not the leak it looks
+        # like: this model is scored nowhere, it only serves live quarters that
+        # are not in the panel at all. The figures the dashboard reports came
+        # from the folds above, where the screen saw training rows only.
+        selector = FEATURE_POLICIES[policy]
+        fitted_features = list(features) if selector is None else (
+            selector(resolved, features, horizon) or list(features))
+        estimator.fit(resolved[fitted_features],
+                      resolved[f"target_{horizon}"].astype(int))
+        if policy == "screened":
+            screened_out = [f for f in features if f not in fitted_features]
+            print(f"       Screen kept {len(fitted_features)} of {len(features)} "
+                  f"ratios: {', '.join(fitted_features)}"
+                  + (f" (no ranking power: {', '.join(screened_out)})"
+                     if screened_out else ""))
 
         import joblib
         artifact = {
             "pipeline": estimator,
-            "feature_names": list(features),
+            "feature_names": list(fitted_features),
+            "feature_pool": list(features),
+            "feature_policy": policy,
+            "feature_ic": {f: nq.information_coefficient(resolved, f, horizon)
+                           for f in features},
             "horizon": horizon,
             "model_name": chosen["name"],
             "shrinkage_weight": float(chosen["shrinkage_weight"]),
+            "shrinkage_capped": bool(chosen.get("shrinkage_capped", False)),
             "validation_metrics": metrics,
             "validation_metrics_unshrunk": chosen["metrics_raw"],
             "fold_metrics": chosen["folds"].to_dict("records"),
@@ -884,7 +989,7 @@ def train_from(universe, quarterly: dict, prices: dict, meter) -> int:
             "baseline_metrics": base_metrics,
             "baseline_roc_auc": float(base_auc) if np.isfinite(base_auc) else None,
             "validation_folds": int(n_folds),
-            "feature_importance": feature_importance(estimator, features),
+            "feature_importance": feature_importance(estimator, fitted_features),
             "training_end_date": f"{resolved.observation_date.max():%Y-%m-%d}",
             "n_training_rows": int(len(resolved)),
             "n_training_tickers": int(resolved.ticker.nunique()),

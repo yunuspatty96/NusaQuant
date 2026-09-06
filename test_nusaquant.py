@@ -173,6 +173,86 @@ for h in ("6m", "12m"):
               train.SHRINKAGE_FLOOR <= r["shrinkage_weight"] <= 1.0,
               f"{r['shrinkage_weight']}")
         check(f"{h} candidate leaderboard recorded", len(r["leaderboard"]) > 1)
+        check(f"{h} leaderboard names its feature policy",
+              all(row["features"] in train.FEATURE_POLICIES
+                  for row in r["leaderboard"]))
+        # A wide spread of probabilities is a claim about ranking. If the
+        # validation could not establish ranking, the spread must not be there.
+        if not r["reliability"]["has_edge"]:
+            check(f"{h} edgeless model is held near the base rate",
+                  r["shrinkage_weight"] <= train.NO_EDGE_SHRINKAGE_CAP,
+                  f"weight {r['shrinkage_weight']}")
+
+# ── 6b. The information-coefficient screen ─────────────────────
+# Built by hand rather than sampled, because a random column is not a control
+# here: on a cross-section this narrow a random column scores |IC| around 0.05
+# by itself, which is exactly why MIN_FEATURE_IC is where it is. So the probes
+# are deterministic. "steady" ranks the same way every quarter. "flips" ranks
+# perfectly one quarter and perfectly backwards the next, which averages to
+# zero while POOLING every quarter together would score it near perfect — the
+# one test that would catch the screen being rewritten to pool.
+rows = []
+for q in range(12):
+    for i in range(12):
+        rows.append({"observation_date": pd.Timestamp("2021-01-01")
+                     + pd.DateOffset(months=3 * q),
+                     "forward_return_6m": float(i),
+                     "steady": float(i),
+                     "flips": float(i if q % 2 == 0 else -i),
+                     "never_varies": 1.0})
+probe = pd.DataFrame(rows)
+
+check("IC finds a ratio that ranks every quarter",
+      nq.information_coefficient(probe, "steady", "6m") > 0.99,
+      f"{nq.information_coefficient(probe, 'steady', '6m'):.3f}")
+check("IC averages quarters instead of pooling them",
+      abs(nq.information_coefficient(probe, "flips", "6m")) < 1e-9,
+      f"{nq.information_coefficient(probe, 'flips', '6m'):.3f}")
+check("IC is undefined for a constant",
+      not np.isfinite(nq.information_coefficient(probe, "never_varies", "6m")))
+
+probes = ["steady", "flips", "never_varies"]
+kept = nq.screen_features(probe, probes, "6m", keep_at_least=1)
+check("screen keeps the ratio that ranks", "steady" in kept)
+check("screen drops the ratio that nets out to nothing", "flips" not in kept, str(kept))
+check("screen keeps a ratio it could not measure rather than guessing",
+      "never_varies" in kept, str(kept))
+check("screen never empties itself",
+      len(nq.screen_features(probe, ["flips"], "6m", keep_at_least=3)) == 1)
+check("screen preserves column order",
+      nq.screen_features(probe, probes, "6m") == probes)
+
+# The bar has to sit above what a random column scores on THIS panel, or the
+# screen is decoration. Measured here rather than asserted in a comment.
+sized = dataset.dropna(subset=["forward_return_6m"]).copy()
+rng = np.random.default_rng(0)
+floor = []
+for _ in range(120):
+    sized["_random"] = rng.normal(size=len(sized))
+    value = nq.information_coefficient(sized, "_random", "6m")
+    if np.isfinite(value):
+        floor.append(abs(value))
+check("MIN_FEATURE_IC clears the panel's own noise floor",
+      nq.MIN_FEATURE_IC >= np.median(floor),
+      f"bar {nq.MIN_FEATURE_IC} vs median |IC| of a random column "
+      f"{np.median(floor):.3f}")
+
+# The screen must read the slice it is handed and nothing else, or the fold
+# protocol is decorative: fitted on early quarters, judged on later ones. Two
+# real slices can legitimately agree, so agreement proves nothing and the probe
+# is built to force a disagreement: "fades" ranks perfectly for the first half
+# of the history and inverts for the second, netting to zero over the whole.
+fades = probe.copy()
+half = fades.observation_date.median()
+fades["fades"] = np.where(fades.observation_date <= half,
+                          fades["forward_return_6m"], -fades["forward_return_6m"])
+early = fades[fades.observation_date <= half]
+check("screen answers from the slice it is given, not the panel",
+      "fades" in nq.screen_features(early, ["steady", "fades"], "6m", keep_at_least=1)
+      and "fades" not in nq.screen_features(fades, ["steady", "fades"], "6m",
+                                            keep_at_least=1),
+      f"early {nq.screen_features(early, ['steady', 'fades'], '6m', keep_at_least=1)} "
+      f"vs all {nq.screen_features(fades, ['steady', 'fades'], '6m', keep_at_least=1)}")
 
 # A constant forecaster ranks nothing, so it must not be credited with an edge
 # or with perfect stability — the two ways the old scoring flattered degeneracy.
@@ -207,6 +287,19 @@ check("train.py completes", code == 0)
 check("exports both models", (WORK/"models"/"model_6m_xgb.joblib").exists()
       and (WORK/"models"/"model_12m_xgb.joblib").exists())
 check("writes metadata", (WORK/"models"/"metadata.json").exists())
+import joblib as _joblib
+for h in ("6m", "12m"):
+    art = _joblib.load(WORK/"models"/f"model_{h}_xgb.joblib")
+    check(f"{h} artifact records its feature policy",
+          art["feature_policy"] in train.FEATURE_POLICIES)
+    check(f"{h} artifact ships only screened features",
+          set(art["feature_names"]) <= set(art["feature_pool"]))
+    check(f"{h} artifact records an IC per candidate ratio",
+          set(art["feature_ic"]) == set(art["feature_pool"]))
+    if not art["has_edge"]:
+        check(f"{h} exported weight respects the no-edge cap",
+              art["shrinkage_weight"] <= train.NO_EDGE_SHRINKAGE_CAP,
+              f"weight {art['shrinkage_weight']}")
 check("reports baseline comparison", "baseline" in output)
 check("says re-running is free", "costs NOTHING" in output)
 check("prints leakage audit", "Leakage audit" in output)
