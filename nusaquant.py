@@ -1289,110 +1289,6 @@ MIN_RISK_CROSS_SECTION = 8           # companies needed before a quarter can ran
 RISK_FEATURE_NAMES: list[str] = ["vol_3m", "der", "dist_52w_high", "reversal_1m"]
 
 
-#: What each model input is called on screen. The column names are fine in a
-#: dataframe and useless in a sentence: nobody reads "vol_3m" and thinks
-#: "how much it has been moving lately".
-FEATURE_LABELS: dict[str, str] = {
-    "vol_3m": "Volatility, last 3 months",
-    "der": "Debt to equity",
-    "dist_52w_high": "Distance from 52-week high",
-    "reversal_1m": "Last month's move",
-    "ps": "Price to sales",
-    "pbv": "Price to book",
-    "roa": "Return on assets",
-    "roe": "Return on equity",
-    "npm": "Net profit margin",
-}
-
-
-#: How each input should be written. A debt-to-equity of 0.46 is a ratio and
-#: reads as "0.46"; a volatility of 0.777 is a percentage and reads as "78%".
-#: Printed raw they look like the same kind of number, and neither means
-#: anything to a reader who has not seen the column before.
-FEATURE_UNITS: dict[str, str] = {
-    "vol_3m": "swing", "dist_52w_high": "percent", "reversal_1m": "percent",
-    "roa": "percent", "roe": "percent", "npm": "percent",
-    "der": "ratio", "ps": "ratio", "pbv": "ratio",
-}
-
-
-def compare_words(value: Any, typical: Any) -> str:
-    """Plainly, how this company sits against the typical one."""
-    a, b = _to_float(value), _to_float(typical)
-    if not np.isfinite(a) or not np.isfinite(b):
-        return "not reported"
-    if abs(b) < 1e-9:
-        return "higher than usual" if a > b else "lower than usual"
-    ratio = a / b if b > 0 else -a / abs(b)
-    if ratio >= 1.75: return "far above typical"
-    if ratio >= 1.15: return "above typical"
-    if ratio >= 0.85: return "about typical"
-    if ratio >= 0.4:  return "below typical"
-    return "far below typical"
-
-
-def effect_words(effect: Any) -> str:
-    """What this input is doing to the forecast, without the arithmetic."""
-    value = _to_float(effect)
-    if not np.isfinite(value):
-        return "\u2014"
-    points = value * 100
-    if points >= 15:  return "pushes it up a lot"
-    if points >= 5:   return "pushes it up"
-    if points > -5:   return "barely matters"
-    if points > -15:  return "pulls it down"
-    return "pulls it down a lot"
-
-
-def feature_label(name: str) -> str:
-    return FEATURE_LABELS.get(name, name.replace("_", " ").capitalize())
-
-
-def explain_prediction(artifact: dict | None, row: pd.DataFrame) -> pd.DataFrame:
-    """How far each input moved this company's forecast.
-
-    One input at a time is replaced by the value a typical training company
-    had, and the forecast is re-run. The difference is that input's
-    contribution.
-
-    This is ablation, not a Shapley value, and the difference is worth being
-    honest about: contributions measured this way do not have to sum to the
-    total, because the model can respond to combinations. It is used anyway
-    because it needs no extra dependency, it is exact rather than sampled, and
-    the question a reader is asking — "what is driving this?" — is answered by
-    the ordering, which ablation gets right.
-    """
-    columns = ["feature", "label", "value", "typical", "effect"]
-    features = list((artifact or {}).get("feature_names", []))
-    medians = (artifact or {}).get("feature_medians") or {}
-    if not artifact or not features or not medians or row is None or row.empty:
-        return pd.DataFrame(columns=columns)
-    missing = [f for f in features if f not in row.columns]
-    if missing:
-        return pd.DataFrame(columns=columns)
-
-    pipeline = artifact["pipeline"]
-    try:
-        base = float(pipeline.predict_proba(row[features])[0, 1])
-    except Exception:
-        return pd.DataFrame(columns=columns)
-
-    rows = []
-    for feature in features:
-        swapped = row[features].copy()
-        swapped.loc[:, feature] = medians.get(feature, np.nan)
-        try:
-            without = float(pipeline.predict_proba(swapped)[0, 1])
-        except Exception:
-            continue
-        rows.append({"feature": feature, "label": feature_label(feature),
-                     "value": _to_float(row[feature].iloc[0]),
-                     "typical": _to_float(medians.get(feature)),
-                     "effect": base - without})
-    frame = pd.DataFrame(rows, columns=columns)
-    return frame.reindex(frame.effect.abs().sort_values(ascending=False).index)
-
-
 def price_features(prices: pd.DataFrame, position: int) -> dict[str, float]:
     """Price-derived features as they stood at one bar, and no later.
 
@@ -2568,23 +2464,6 @@ def format_multiple(value: Any) -> str:
 
 
 def format_feature(name: str, value: Any) -> str:
-    # The price-derived inputs have no FeatureSpec — they are computed
-    # from bars rather than filings — so they are formatted from
-    # FEATURE_UNITS first. Without this they fell through to the dash
-    # below, and the explanation panel showed one on every row it cared
-    # about. A second format_feature was briefly defined above to handle
-    # them, which Python quietly shadowed with this one.
-    # Only where the schema has nothing to say. These units are a fallback for
-    # the bar-derived inputs, not an override: ROE is in FEATURE_SCHEMA and
-    # must keep reading "12.0%" in the Fundamentals table, which it stopped
-    # doing the moment this branch was allowed to win.
-    unit = None if name in FEATURE_BY_NAME else FEATURE_UNITS.get(name)
-    if unit in ("swing", "percent"):
-        number = _to_float(value)
-        if not np.isfinite(number):
-            return "—"
-        return (format_swing(number, 0) if unit == "swing"
-                else f"{number * 100:+.0f}%")
     spec = FEATURE_BY_NAME.get(name)
     if spec is None:
         return "—"
@@ -2708,18 +2587,6 @@ TOOLTIPS: dict[str, str] = {
         "universe. Above 50% means wider swings than average are expected; "
         "below 50% means calmer. It says nothing about direction — a stock "
         "can be turbulent on the way up.",
-    "explanation":
-        "How far the forecast moves when this input alone is replaced by the "
-        "value a typical company had. Positive means the input is pushing the "
-        "forecast up. Effects are measured one at a time, so they need not sum "
-        "to the total \u2014 a model can respond to combinations of inputs as "
-        "well as to each one.",
-    "track_record":
-        "The volatility these companies actually recorded over the following "
-        "period, grouped by what the model predicted for them beforehand. "
-        "Every figure is out of sample: the model that scored each quarter was "
-        "fitted only on rows whose own forward window had closed before that "
-        "quarter began.",
     "risk_class":
         "High, Medium or Low, from where this company's volatility forecast "
         "sits among every company on file — the top third, middle third or "

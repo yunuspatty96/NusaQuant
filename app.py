@@ -1141,32 +1141,19 @@ def tile(column, label: str, value: str, band: str | None = None,
         unsafe_allow_html=True)
 
 
-def render_features(company: dict, model_features: list[str]) -> None:
+def render_features(company: dict) -> None:
     section("Fundamentals")
     row = company["features"].iloc[0]
-    used = set(model_features or [])
 
     body = []
     for category in nq.CATEGORY_ORDER:
         specs = [f for f in nq.FEATURE_SCHEMA if f.category == category]
         if not specs:
             continue
-        body.append(f"<tr class='grp'><td colspan='5'>{escape(category)}</td></tr>")
+        body.append(f"<tr class='grp'><td colspan='4'>{escape(category)}</td></tr>")
         for spec in specs:
             value = row.get(spec.name)
             present = np.isfinite(nq._to_float(value))
-            # Three states, not two. "Reference" is for the rupiah amounts and
-            # the per-share figures: they are shown because a reader wants them,
-            # but a level cannot be a cross-sectional input — a bank with IDR
-            # 1,600T of assets and a small cap with IDR 2T are not on one scale.
-            if not spec.point_in_time:
-                in_model = "Snapshot"
-            elif not spec.modelled:
-                in_model = "Reference"
-            elif spec.name in used:
-                in_model = "Yes"
-            else:
-                in_model = "No (dropped)" if used else "Unknown"
             meaning = (spec.meaning if present
                        else f"Not available. {nq.feature_absence_reason(spec.name)}")
             expansion = (f"<span class='sub'>{escape(spec.expansion)}</span>"
@@ -1178,27 +1165,22 @@ def render_features(company: dict, model_features: list[str]) -> None:
                 f"<td class='num{muted}'>"
                 f"{escape(nq.format_feature(spec.name, value))}</td>"
                 f"<td>{escape(spec.unit.title())}</td>"
-                f"<td>{escape(in_model)}</td>"
                 f"<td class='{muted.strip()}'>{escape(meaning)}</td>"
                 "</tr>")
 
     st.markdown(
         "<table class='nq-table nq-metrics'>"
-        "<colgroup><col style='width:20%'><col style='width:13%'>"
-        "<col style='width:11%'><col style='width:13%'><col style='width:43%'>"
+        "<colgroup><col style='width:22%'><col style='width:14%'>"
+        "<col style='width:12%'><col style='width:52%'>"
         "</colgroup>"
         "<thead><tr><th>Metric</th><th>Value</th><th>Unit</th>"
-        "<th>In model</th><th>Meaning</th></tr></thead>"
+        "<th>Meaning</th></tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table>",
         unsafe_allow_html=True)
 
-    modelled = sum(1 for f in nq.FEATURE_SCHEMA if f.modelled)
-    as_of = nq.screen_as_of()
-    screened = f" taken on {as_of}" if as_of else ""
-    note(f"As reported for the latest financial period. <em>In model</em> "
-         f"marks which of the {modelled} ratios the estimate reads. A dash "
-         f"means not reported, or not meaningful for this company \u2014 the "
-         f"Meaning column says which.")
+    note("As reported for the latest financial period. A dash means not "
+         "reported, or not meaningful for this company \u2014 the Meaning "
+         "column says which.")
 
 
 def render_return_forecast(predictions: dict, models: dict) -> None:
@@ -1260,117 +1242,8 @@ def risk_band(probability: float) -> str:
     return "Calmer than most"
 
 
-def render_forecast_explanation(models: dict, features: pd.DataFrame) -> None:
-    """What moved this company's forecast, in words before numbers.
-
-    The first version of this panel printed the raw model inputs — 0.777438
-    against a typical 0.325607, and an effect of "+30 pts". Every one of those
-    is precise and none of them tells a reader anything, because the units are
-    invisible and the scale is unknown. The numbers are still here, one column
-    to the right of the sentence that says what they mean.
-    """
-    tables = {}
-    for horizon in nq.RISK_HORIZONS:
-        frame = nq.explain_prediction(models.get(horizon), features)
-        if not frame.empty:
-            tables[horizon] = frame.set_index("feature")
-    if not tables:
-        return
-
-    # Not `tables.get(...) or next(...)`: a DataFrame has no truth value, and
-    # pandas raises rather than guessing.
-    short = tables["risk_6m"] if "risk_6m" in tables else next(iter(tables.values()))
-    top = short.iloc[0] if len(short) else None
-
-    with st.expander("Why these numbers?"):
-        if top is not None:
-            direction = "up" if top["effect"] > 0 else "down"
-            note(f"Mostly one thing: <strong>{top['label'].lower()}</strong> is "
-                 f"{nq.compare_words(top['value'], top['typical'])} for this "
-                 f"company, and that pushes the 6-month figure {direction}. "
-                 f"The rest matter less.")
-        rows = {"What the model looked at": [nq.feature_label(f) for f in short.index],
-                "This company": [nq.format_feature(f, short.loc[f, "value"])
-                                 for f in short.index],
-                "A typical company": [nq.format_feature(f, short.loc[f, "typical"])
-                                      for f in short.index]}
-        config = {
-            "What the model looked at": st.column_config.TextColumn(width="medium"),
-            "This company": st.column_config.TextColumn(width="small"),
-            "A typical company": st.column_config.TextColumn(width="small")}
-        for horizon, frame in tables.items():
-            months = 6 if horizon.endswith("6m") else 12
-            label = f"Effect on the {months}M figure"
-            rows[label] = [nq.effect_words(frame.loc[f, "effect"])
-                           if f in frame.index else "\u2014" for f in short.index]
-            config[label] = st.column_config.TextColumn(
-                width="medium", help=nq.TOOLTIPS["explanation"])
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
-                     column_config=config)
-
-
-def render_track_record(models: dict) -> None:
-    """What the forecast said before, and what happened after.
-
-    This is the evidence the page was otherwise asking readers to take on
-    trust. "ROC-AUC 0.699" is a fact about a model; "the ones it called high
-    risk went on to move twice as much" is the same fact about the world, and
-    only the second can be checked against a reader's own experience.
-    """
-    records = {h: (models.get(h) or {}).get("track_record")
-               for h in nq.RISK_HORIZONS}
-    records = {h: r for h, r in records.items() if r and r.get("bands")}
-    if not records:
-        return
-
-    short = (records["risk_6m"] if "risk_6m" in records
-             else next(iter(records.values())))
-    bands = {b["band"]: b for b in short["bands"]}
-    with st.expander("Has this been right before?"):
-        low, high = bands.get("Low"), bands.get("High")
-        if low and high and low["realised"] > 0:
-            times = high["realised"] / low["realised"]
-            note(f"Yes, on the whole. Over {short['rebalances']} past "
-                 f"six-month periods, the companies it marked "
-                 f"<strong>Low risk</strong> went on to move about "
-                 f"{nq.format_swing(low['realised'], 0)} across a year. The "
-                 f"ones it marked <strong>High risk</strong> moved "
-                 f"{nq.format_swing(high['realised'], 0)} \u2014 roughly "
-                 f"{times:.1f} times as much.")
-        rows = {"What it said beforehand": [f"{b['band']} risk"
-                                            for b in short["bands"]]}
-        config = {"What it said beforehand":
-                  st.column_config.TextColumn(width="medium")}
-        for horizon, record in records.items():
-            months = 6 if horizon.endswith("6m") else 12
-            label = f"How much they moved, next {months} months"
-            rows[label] = [b["realised"] * 100 for b in record["bands"]]
-            config[label] = st.column_config.NumberColumn(
-                format="\u00b1%.0f%%", help=nq.TOOLTIPS["track_record"])
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
-                     column_config=config)
-
-        # "0.50, 0.51, 0.68, 0.81…" is a fact about ROC-AUC, not about whether
-        # a reader should believe this. How often it beat a coin toss is.
-        for horizon, record in records.items():
-            months = 6 if horizon.endswith("6m") else 12
-            folds = record.get("folds") or []
-            if not folds:
-                continue
-            better = sum(1 for f in folds if f["roc_auc"] >= nq.MIN_EDGE_AUC)
-            worst = record.get("worst_calibration") or {}
-            drift = (f" It is least reliable in the middle: when it says around "
-                     f"{worst['said']:.0%}, the real rate has been nearer "
-                     f"{worst['happened']:.0%}, so treat a middling figure as "
-                     f"\u201cnot sure\u201d."
-                     if worst.get("gap", 0) >= 0.1 else "")
-            st.caption(f"Over {months} months it did better than a coin toss in "
-                       f"{better} of {len(folds)} periods.{drift}")
-
-
 def render_risk_analysis(prices: pd.DataFrame, window: str, risks: dict,
-                         models: dict, peers: dict,
-                         features: pd.DataFrame) -> None:
+                         models: dict, peers: dict) -> None:
     """One section for risk, forecast first and history underneath.
 
     These used to be two things in two places: a descriptive "Historical risk"
@@ -1421,9 +1294,6 @@ def render_risk_analysis(prices: pd.DataFrame, window: str, risks: dict,
                 st.warning("Did not beat chance out of sample.")
     if not shown:
         st.info("The volatility forecast is unavailable for this company.")
-
-    render_forecast_explanation(models, features)
-    render_track_record(models)
 
     st.markdown("**Historical Risk**")
     years = PRICE_WINDOWS[window]
@@ -1535,10 +1405,9 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
     render_trading_conditions(prices if company["prices"].empty
                               else company["prices"])
     render_income_chart(company)
-    model_features = list((models.get("6m") or {}).get("feature_names", []))
-    render_features(company, model_features)
+    render_features(company)
 
-    render_risk_analysis(prices, window, risks, models, peers, features)
+    render_risk_analysis(prices, window, risks, models, peers)
 
     if not models:
         render_missing_models()
@@ -1725,8 +1594,6 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
             if artifact else "")
          + "Risk Class is the company's position among all companies on "
            "file, not an absolute scale. Click any heading to re-sort.")
-    render_track_record(models)
-
     if not controls["offline"]:
         st.caption("Volatility columns need daily price history, which live "
                    "mode does not fetch here. Switch to the cached snapshot "

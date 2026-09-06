@@ -728,88 +728,6 @@ def _cap_shrinkage(chosen: dict, baseline: dict, cap: float) -> dict:
     return chosen
 
 
-def track_record(dataset: pd.DataFrame, features, horizon: str,
-                 name: str) -> dict:
-    """What the model said at each past rebalance, and what then happened.
-
-    Every figure here is out of sample by construction: the model that scores
-    a quarter was fitted only on rows whose own forward window had already
-    closed before that quarter began.
-
-    This is the evidence the dashboard was asking readers to take on trust. An
-    ROC-AUC of 0.699 is a number about a model; "the companies it called low
-    risk went on to move 31% a year and the ones it called high risk moved
-    59%" is a statement about the world, and it is the same fact.
-    """
-    realised = f"forward_volatility_{horizon}"
-    target = f"target_{horizon}"
-    if realised not in dataset.columns:
-        return {}
-
-    blocks = []
-    for fold in nq.walk_forward_folds(dataset, horizon):
-        train, test = dataset.loc[fold["train_index"]], dataset.loc[fold["validation_index"]]
-        y = train[target].astype(int)
-        if y.nunique() < 2:
-            continue
-        estimator = build_model(name, weight=1.0)
-        estimator.fit(train[features], y)
-        block = test[[target, realised]].copy()
-        block["predicted"] = estimator.predict_proba(test[features])[:, 1]
-        block["fold"] = str(fold["validation_year"])
-        blocks.append(block)
-    if not blocks:
-        return {}
-
-    oos = pd.concat(blocks, ignore_index=True).dropna(subset=[realised])
-    if len(oos) < 30:
-        return {}
-
-    # Terciles within each quarter, matching how the dashboard bands a company
-    # against its peers rather than against a fixed cut-off.
-    def bands(series):
-        if series.nunique() < 3:
-            return pd.Series("Medium", index=series.index)
-        return pd.qcut(series.rank(method="first"), 3,
-                       labels=["Low", "Medium", "High"])
-
-    oos["band"] = oos.groupby("fold")["predicted"].transform(bands)
-    by_band = []
-    for band in ("Low", "Medium", "High"):
-        rows = oos[oos.band == band]
-        if rows.empty:
-            continue
-        by_band.append({"band": band, "n": int(len(rows)),
-                        "realised": float(rows[realised].median()),
-                        "share_above": float(rows[target].mean())})
-
-    from sklearn.metrics import roc_auc_score
-    per_fold = []
-    for fold, rows in oos.groupby("fold", sort=True):
-        if rows[target].nunique() < 2:
-            continue
-        per_fold.append({"fold": fold, "n": int(len(rows)),
-                         "roc_auc": float(roc_auc_score(rows[target].astype(int),
-                                                        rows.predicted))})
-
-    # Where the probability drifts furthest from what followed. Reported rather
-    # than corrected: isotonic and Platt were both fitted leave-one-fold-out on
-    # these same rows and both came out worse, which is what 237 rows and an
-    # already-shrunk probability should be expected to do.
-    worst = {}
-    buckets = pd.cut(oos.predicted, [0, .35, .5, .65, 1.0])
-    for interval, rows in oos.groupby(buckets, observed=True):
-        if len(rows) < 10:
-            continue
-        gap = abs(float(rows.predicted.mean()) - float(rows[target].mean()))
-        if gap > worst.get("gap", 0):
-            worst = {"gap": gap, "said": float(rows.predicted.mean()),
-                     "happened": float(rows[target].mean()), "n": int(len(rows))}
-
-    return {"n": int(len(oos)), "rebalances": int(oos.fold.nunique()),
-            "bands": by_band, "folds": per_fold, "worst_calibration": worst}
-
-
 def train_risk_model(dataset: pd.DataFrame) -> list[str]:
     """Train and export a volatility model for each horizon.
 
@@ -903,12 +821,6 @@ def train_risk_model(dataset: pd.DataFrame) -> list[str]:
             "baseline_metrics": baseline.get("metrics", {}),
             "validation_folds": int(len(chosen["folds"])),
             "feature_importance": feature_importance(estimator, features),
-            # What a typical training company looked like, so the dashboard can
-            # say which inputs moved a given forecast away from ordinary.
-            "feature_medians": {f: float(v) for f, v
-                                in labelled[features].median().items()},
-            "track_record": track_record(dataset, features, horizon,
-                                         chosen["name"]),
             "training_end_date": f"{labelled.observation_date.max():%Y-%m-%d}",
             "n_training_rows": int(len(labelled)),
             "n_training_tickers": int(labelled.ticker.nunique()),
