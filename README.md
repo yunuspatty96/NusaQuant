@@ -150,8 +150,8 @@ The single-stock page runs in this order:
 
 | Section | What it is |
 |---|---|
-| Price history | Line or candlestick, MA50 and MA200, volume beneath |
-| RSI and MACD | Charted over the same window |
+| Price history | Line or candlestick, MA50/MA200, support and resistance, the projected range, volume beneath |
+| Technical Indicators | RSI and MACD charted over the same window |
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
@@ -179,6 +179,15 @@ so the dashboard shows 50% and 80% instead, at the measured multipliers.
 The cone is deliberately symmetric around the last close. It says how far the
 price might travel, never which way — direction is the probability's job, and
 on this snapshot the probability does that job poorly.
+
+**Support and resistance are descriptive and have no horizon.** A level is
+drawn where several swing highs or lows cluster within 2% of each other, and
+the more swings it collected the more it is worth looking at. Swings are
+compared against each cluster's anchor rather than its last member: chaining
+off the last member let one BBCA "level" accumulate 75 touches while actually
+spanning 7,000 to 11,000, which is not a level. The lines mark where the price
+has stopped before, never where it will stop, and they are drawn across the
+history only — not projected forward.
 
 **Only the 50% band is drawn.** The 80% band is correctly calibrated — split by
 volatility, the most volatile quarter of observations saw it catch 74.9% at six

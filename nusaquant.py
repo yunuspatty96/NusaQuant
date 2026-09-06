@@ -1471,6 +1471,92 @@ def volatility_cone(prices: pd.DataFrame,
     return cone
 
 
+def cone_path(cone: dict[str, Any], level: int = 50,
+              steps: int = 36) -> pd.DataFrame:
+    """The band traced step by step from today to the 12-month horizon.
+
+    Drawn as a curve rather than straight lines between 0, 126 and 252 days,
+    because the width grows with the square root of time and a straight line
+    between the three anchors understates it in between. It also gives the
+    chart a value at every point to report on hover, which three anchors
+    cannot.
+    """
+    if not cone.get("available"):
+        return pd.DataFrame()
+    horizon = max(CONE_MULTIPLIERS)
+    multiplier = CONE_MULTIPLIERS[horizon][level]
+    daily = cone["annual_volatility"] / math.sqrt(TRADING_DAYS_PER_YEAR)
+    days = np.linspace(0, horizon, steps + 1)
+    # The multiplier itself drifts between the two calibrated horizons, so it
+    # is interpolated rather than held at the 12-month value throughout.
+    short, long = sorted(CONE_MULTIPLIERS)
+    k = np.interp(days, [0, short, long],
+                  [CONE_MULTIPLIERS[short][level],
+                   CONE_MULTIPLIERS[short][level],
+                   CONE_MULTIPLIERS[long][level]])
+    width = k * daily * np.sqrt(days)
+    return pd.DataFrame({"days": days,
+                         "low": cone["last"] * np.exp(-width),
+                         "high": cone["last"] * np.exp(width)})
+
+
+def support_resistance(prices: pd.DataFrame, window: int = 10,
+                       levels: int = 3, tolerance: float = 0.02) -> dict[str, list]:
+    """Prices the market has repeatedly turned at, above and below today.
+
+    A swing high is a bar whose high is the highest in the window either side
+    of it, and a swing low the mirror of that. Swings within ``tolerance`` of
+    each other are one level, and the levels that collected the most swings win
+    — a price the market turned at four times says more than one it touched
+    once.
+
+    This is descriptive and has no horizon. A level is where the price has
+    stopped before, not where it will stop; the further back it was set, the
+    less anyone still remembers it.
+    """
+    empty = {"support": [], "resistance": []}
+    if prices is None or prices.empty or "close" not in prices.columns:
+        return empty
+    history = prices.sort_values("date").reset_index(drop=True)
+    high = (history["high"] if "high" in history.columns
+            else history["close"]).astype(float)
+    low = (history["low"] if "low" in history.columns
+           else history["close"]).astype(float)
+    if len(history) < window * 3:
+        return empty
+
+    swings = []
+    for index in range(window, len(history) - window):
+        around_high = high.iloc[index - window:index + window + 1]
+        around_low = low.iloc[index - window:index + window + 1]
+        if high.iloc[index] >= around_high.max():
+            swings.append(float(high.iloc[index]))
+        if low.iloc[index] <= around_low.min():
+            swings.append(float(low.iloc[index]))
+    if not swings:
+        return empty
+
+    # Compared against the cluster's own anchor, not its last member. Chaining
+    # off the last member lets a dense run of swings walk a single cluster
+    # across a huge range: BBCA produced one "level" holding 75 touches that
+    # actually spanned from 7,000 to 11,000, which is not a level at all.
+    clusters: list[list[float]] = []
+    for price in sorted(swings):
+        if clusters and price <= clusters[-1][0] * (1 + tolerance):
+            clusters[-1].append(price)
+        else:
+            clusters.append([price])
+
+    last = float(history["close"].iloc[-1])
+    scored = sorted(({"price": float(np.median(c)), "touches": len(c)}
+                     for c in clusters),
+                    key=lambda level: (-level["touches"], -level["price"]))
+    below = [l for l in scored if l["price"] < last]
+    above = [l for l in scored if l["price"] > last]
+    return {"support": sorted(below[:levels], key=lambda l: -l["price"]),
+            "resistance": sorted(above[:levels], key=lambda l: l["price"])}
+
+
 def rsi_series(close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder's RSI across the whole series, for charting."""
     values = pd.Series(close, dtype=float)
@@ -2073,6 +2159,12 @@ TOOLTIPS: dict[str, str] = {
         "it landed about half the time historically, the 80% range about eight "
         "times in ten. It says how far, never which way, and it assumes the "
         "stock keeps moving as much as it has been.",
+    "support_resistance":
+        "Prices this stock has repeatedly turned at before: a level is drawn "
+        "where several swing highs or lows cluster together, and the more "
+        "swings it collected the stronger the line. Descriptive and without a "
+        "horizon — it marks where the price has stopped in the past, not where "
+        "it will stop.",
     "turnover":
         "Median daily traded value as a share of market capitalisation. Thin "
         "trading is itself a risk: it is what makes a position hard to leave "
@@ -2107,11 +2199,12 @@ EXPLANATIONS = {
              "guarantee future risk."),
     "cone": ("<strong>How to read the shaded range.</strong> It shows how far "
              "this stock's price could drift over the next 6 and 12 months, "
-             "based on how much it has actually moved over the past year. The "
-             "shaded area is where the price ended up about half the time in "
-             "the past. The table below adds a wider range that held eight "
-             "times in ten; it is left off the chart because for a volatile "
-             "stock it covers so much ground that it would swamp the price."
+             "based on how much it has actually moved over the past year. "
+             "Hover anywhere inside it to read the range on that date. Half "
+             "the time in the past the price ended up inside this band; the "
+             "table below the indicators adds a wider one that held eight "
+             "times in ten, which is left off the chart because for a volatile "
+             "stock it covers so much ground it would flatten the price line."
              "<br><br><strong>It does not say which way.</strong> The range is "
              "the same size above and below today's price on purpose. Whether "
              "the stock rises or falls is what the probability figures try to "

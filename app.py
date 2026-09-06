@@ -370,7 +370,10 @@ def configure_page() -> None:
       .nq-sub {{ color:{MUTED}; font-size:.9rem; }}
       .nq-sec {{ font-size:1.05rem; font-weight:600; margin:1.4rem 0 .5rem;
                  padding-bottom:.3rem; border-bottom:1px solid {GRID}; }}
-      .nq-note {{ color:{MUTED}; font-size:.84rem; line-height:1.55; }}
+      .nq-note {{ color:{MUTED}; font-size:.84rem; line-height:1.55;
+                  margin:.9rem 0 .2rem; }}
+      .nq-note + .nq-note {{ margin-top:1.1rem; }}
+      .nq-note p {{ margin:0 0 .7rem; }}
       .nq-tile {{ padding:.1rem 0 .3rem; }}
       .nq-tile-label {{ color:{MUTED}; font-size:.8rem; line-height:1.3;
                         margin-bottom:.15rem; }}
@@ -730,22 +733,53 @@ def render_chart(company: dict, api_key: str,
         # panel's 12-month 80% ranges span more than five times bottom to top,
         # and MORA's spans sixty-five. Shading that would stretch the axis
         # until the price line became a flat scratch. It is tabulated instead.
-        for level, shade in ((50, "rgba(29,78,111,.20)"),):
-            upper = [cone["last"]] + [cone["bands"][h][level][1] for h in (126, 252)]
-            lower = [cone["last"]] + [cone["bands"][h][level][0] for h in (126, 252)]
+        # A stepped path rather than three anchors: the width grows with the
+        # square root of time, so straight lines between today, +6m and +12m
+        # understate it in between — and three points give hover nothing to
+        # report at any date the reader actually points at.
+        path = nq.cone_path(cone, level=50)
+        dates = [last_date + pd.Timedelta(days=int(d * 365 / 252))
+                 for d in path["days"]]
+        figure.add_trace(go.Scatter(
+            x=dates + dates[::-1],
+            y=path["high"].tolist() + path["low"].tolist()[::-1],
+            fill="toself", fillcolor="rgba(29,78,111,.18)", line={"width": 0},
+            hoverinfo="skip", name="50% projected range"), row=1, col=1)
+        for column, label in (("high", "50% range high"),
+                              ("low", "50% range low")):
             figure.add_trace(go.Scatter(
-                x=future + future[::-1], y=upper + lower[::-1], fill="toself",
-                fillcolor=shade, line={"width": 0}, hoverinfo="skip",
-                name=f"{level}% projected range"), row=1, col=1)
-            span = [min(span[0], *lower), max(span[1], *upper)]
-    for column in ("ma50", "ma200"):
-        if column in averages and averages[column].notna().any():
-            span[0] = min(span[0], float(averages[column].min()))
-            span[1] = max(span[1], float(averages[column].max()))
-    pad = max((span[1] - span[0]) * 0.08, span[1] * 0.02, 1.0)
+                x=dates, y=path[column], mode="lines", name=label,
+                line={"color": ACCENT, "width": 1, "dash": "dot"},
+                opacity=.55, showlegend=False,
+                hovertemplate="Rp %{y:,.0f}<extra>" + label + "</extra>"),
+                row=1, col=1)
+        span = [min(span[0], float(path["low"].min())),
+                max(span[1], float(path["high"].max()))]
 
+    # Support and resistance: horizontal levels the price has turned at, drawn
+    # across the history only. They describe the past and are not projected.
+    levels = nq.support_resistance(company["prices"]
+                                   if not company["prices"].empty else prices)
+    for kind, colour in (("resistance", NEGATIVE), ("support", POSITIVE)):
+        for level in levels.get(kind, []):
+            price = level["price"]
+            if not (span[0] * 0.75 <= price <= span[1] * 1.25):
+                continue
+            figure.add_trace(go.Scatter(
+                x=[history["date"].iloc[0], history["date"].iloc[-1]],
+                y=[price, price], mode="lines", showlegend=False,
+                line={"color": colour, "width": 1, "dash": "dash"},
+                opacity=.45,
+                hovertemplate=(f"Rp {price:,.0f}<extra>{kind.title()} · "
+                               f"{level['touches']} touches</extra>")),
+                row=1, col=1)
+            span = [min(span[0], price), max(span[1], price)]
+
+    # The axis is padded after every trace is in, so the cone and the levels
+    # both fit rather than being clipped by a range computed before them.
+    pad = max((span[1] - span[0]) * 0.06, span[1] * 0.02, 1.0)
     figure.update_layout(
-        height=420 if has_volume else 340,
+        height=440 if has_volume else 360,
         margin={"l": 0, "r": 0, "t": 30, "b": 0},
         plot_bgcolor="white", paper_bgcolor="white", bargap=0.1,
         hovermode="x unified",
@@ -767,6 +801,10 @@ def render_chart(company: dict, api_key: str,
          f"{nq.format_percent(change, 1)}. MA50 and MA200 are drawn only where "
          f"there is enough history to form them. Drag across the chart to "
          f"zoom in, scroll to zoom, double-click to reset.")
+    if any(levels.get(k) for k in ("support", "resistance")):
+        note("<strong>Dashed lines</strong> mark prices this stock has turned "
+             "at before — red above today's price, green below. "
+             + nq.TOOLTIPS["support_resistance"])
     if cone.get("available"):
         note(nq.EXPLANATIONS["cone"])
     elif project:
@@ -899,7 +937,9 @@ def render_income_chart(company: dict) -> None:
 
 def render_momentum_charts(prices: pd.DataFrame) -> None:
     """RSI and MACD as charts. The tiles below give the latest reading only."""
+    section("Technical Indicators")
     if prices is None or prices.empty or "close" not in prices.columns:
+        st.info("No price history to chart indicators from.")
         return
     history = prices.sort_values("date").reset_index(drop=True)
     close = history["close"].astype(float)

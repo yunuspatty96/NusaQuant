@@ -278,6 +278,31 @@ check("no projected range without a year of prices",
       not nq.volatility_cone(
           nq.load_from_cache(TICKERS[0], "prices").head(120)).get("available"))
 
+# Support and resistance sit either side of the last close by construction,
+# and a cluster must not chain its way across a wide range: comparing each
+# swing to the cluster's last member instead of its anchor once produced a
+# single "level" holding 75 touches that spanned 7,000 to 11,000.
+_px = nq.load_from_cache(TICKERS[0], "prices")
+_sr = nq.support_resistance(_px)
+_last_close = float(_px.sort_values("date")["close"].iloc[-1])
+check("resistance sits above the last close",
+      all(l["price"] > _last_close for l in _sr["resistance"]))
+check("support sits below the last close",
+      all(l["price"] < _last_close for l in _sr["support"]))
+check("no level chains across a wide range",
+      all(l["touches"] < 40 for l in _sr["support"] + _sr["resistance"]),
+      str([l["touches"] for l in _sr["support"] + _sr["resistance"]]))
+
+# The cone is drawn as a curve, and its anchors must still match the table.
+_cone = nq.volatility_cone(_px)
+if _cone.get("available"):
+    _path = nq.cone_path(_cone, level=50)
+    _at252 = _path.iloc[-1]
+    _lo, _hi = _cone["bands"][252][50]
+    check("the drawn curve ends where the tabulated range ends",
+          abs(_at252["low"] - _lo) < 1 and abs(_at252["high"] - _hi) < 1,
+          f"{_at252['low']:.0f}/{_lo:.0f}")
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",
