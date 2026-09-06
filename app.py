@@ -95,7 +95,7 @@ UNIVERSE_SIZE_HELP = ("How many companies to include, counting down from the "
 #: sector view left the dispatch matching a string nothing produced any more,
 #: which quietly opened Top Picks instead.
 MODE_SINGLE = "Single Stock Analysis"
-MODE_PICKS = "Machine Learning Top Picks (Ranked)"
+MODE_PICKS = "Machine Learning Screening"
 MODE_SECTOR = "Sector Ranking (Compare Ratios)"
 
 #: Plotly options shared by every chart. The mode bar is left at its default,
@@ -1458,60 +1458,62 @@ def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -
 # BEST 10
 # ══════════════════════════════════════════════════════════════════════
 
-def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> None:
+def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> None:
+    """Every company in the universe, both estimates, sorted by the reader.
+
+    This view used to be "Top Picks", ordered by the return probability and cut
+    to ten. Both halves of that were a claim the testing does not support: the
+    return model has no measurable out-of-sample edge, so ranking by it put an
+    ordering on the page that meant nothing, and calling the first ten "picks"
+    invited exactly the reading it could not bear.
+
+    So nothing is ranked for you. The table opens in market-cap order, which
+    asserts nothing, and every column sorts on click. The figures are numeric
+    rather than pre-formatted strings for that reason \u2014 a column of "53%"
+    text sorts 9% above 53%, which is the kind of bug that stays invisible
+    until someone acts on it.
+    """
     section(MODE_PICKS)
     if not models:
         render_missing_models(); return
 
-    horizon = "6m" if st.radio("Horizon", ["6 Months", "12 Months"], horizontal=True,
+    horizon = "6m" if st.radio("Return horizon", ["6 Months", "12 Months"],
+                               horizontal=True,
                                label_visibility="collapsed") == "6 Months" else "12m"
     artifact = models.get(horizon)
-    if not artifact:
-        st.info("No machine learning model for this horizon."); return
+    risk_artifact = models.get("risk")
+    if not artifact and not risk_artifact:
+        st.info("No machine learning model is available."); return
 
-    if not artifact.get("has_edge", True):
-        st.warning(
-            "**This ranking is not evidence.** The machine learning model for this "
-            "horizon showed "
-            "no measurable out-of-sample edge, so the order below reflects how it "
-            "sorts fundamentals in training, not a validated ability to pick "
-            "winners. It is shown for inspection of the pipeline, not as a "
-            "shortlist to act on.")
-
-    # step=1, not 5. The universe holds 19 companies, and a step of 5 made 19
-    # unreachable: the slider stopped at 15 and quietly excluded four of them
-    # from every ranking, with nothing on screen to say so.
     largest = max(5, len(companies))
-    # A bordered container rather than st.form, which is what Sector Ranking
-    # uses: a form holds its widget values back until submit, and the live-mode
-    # cost estimate below has to move with the slider. The border is the same.
     with st.container(border=True):
         size = st.slider("Universe size", 5, largest, min(len(companies), largest),
                          step=1,
                          help=UNIVERSE_SIZE_HELP.format(total=len(companies)))
         st.caption(UNIVERSE_SIZE_NOTE)
         if controls["offline"]:
-            st.caption(f"Ranking the companies recorded on {snapshot_as_of()}.")
+            st.caption(f"Screening the companies recorded on {snapshot_as_of()}.")
         else:
             st.caption(f"Estimated cost: about "
                        f"{size * CREDITS_PER_COMPANY:,} API credits.")
-        go = st.button("Show top picks", type="primary")
+        go = st.button("Screen the universe", type="primary")
 
     if not go:
-        st.info("Press the button to rank the universe."); return
+        st.info("Press the button to screen the universe."); return
 
     universe = companies.head(size)
-    rows, metrics_by_ticker = [], {}
-    progress = st.progress(0.0, text="Scoring…")
+    rows = []
+    progress = st.progress(0.0, text="Scoring\u2026")
 
     for index, company_row in enumerate(universe.itertuples(), start=1):
         progress.progress(index / len(universe), text=f"Scoring {company_row.symbol}")
         record = {"ticker": company_row.symbol, "company_name": company_row.company_name,
-                  "probability": np.nan, "risk": "Not measured",
-                  "trend": "Not measured", "data_quality": 0.0,
-                  "eligible": False, "reason": ""}
+                  "probability": np.nan, "risk_probability": np.nan,
+                  "volatility": np.nan, "trend": "Not measured",
+                  "data_quality": 0.0, "eligible": False, "reason": ""}
         try:
-            company = load_company(company_row.symbol, controls["api_key"], controls["offline"])
+            company = load_company(company_row.symbol, controls["api_key"],
+                                   controls["offline"])
         except nq.SectorsAPIError as error:
             record["reason"] = error.message; rows.append(record); continue
 
@@ -1520,87 +1522,94 @@ def render_best_10(companies: pd.DataFrame, models: dict, controls: dict) -> Non
                                 f"(minimum {nq.MIN_QUARTERS_FOR_PREDICTION})")
             rows.append(record); continue
 
-        result = predict(company["features"], artifact, horizon)
-        if not result.get("available"):
+        features = with_price_features(company["features"], company["prices"])
+        result = predict(features, artifact, horizon)
+        if result.get("available"):
+            record.update({"probability": result["probability"], "eligible": True,
+                           "data_quality": result["data_quality"]})
+        else:
             record["reason"] = result.get("reason", "unavailable")
             record["data_quality"] = result.get("data_quality", 0.0)
-            rows.append(record); continue
 
-        record.update({"probability": result["probability"], "eligible": True,
-                       "data_quality": result["data_quality"]})
+        risk = predict(features, risk_artifact, "risk")
+        if risk.get("available"):
+            record["risk_probability"] = risk["probability"]
+            record["eligible"] = True
         if not company["prices"].empty:
-            metrics_by_ticker[company_row.symbol] = nq.risk_metrics(company["prices"], 1)
-            record["trend"] = nq.technical_state(company["prices"]).get("trend",
-                                                                       "Not measured")
+            record["volatility"] = nq.risk_metrics(company["prices"], 1)["volatility"]
+            record["trend"] = nq.technical_state(company["prices"]).get(
+                "trend", "Not measured")
         rows.append(record)
     progress.empty()
 
-    ranked = pd.DataFrame(rows).sort_values("probability", ascending=False,
-                                            na_position="last").reset_index(drop=True)
-
-    # Risk is ranked across the shortlist, so "High" means high relative to
-    # these peers rather than against an arbitrary absolute threshold.
-    peers = list(metrics_by_ticker.values())
-    for ticker, metrics in metrics_by_ticker.items():
-        ranked.loc[ranked.ticker == ticker, "risk"] = nq.risk_score(metrics, peers)["band"]
-
-    qualified = ranked[ranked.eligible]
+    screened = pd.DataFrame(rows)
+    qualified = screened[screened.eligible]
     if qualified.empty:
         st.error("No company met NusaQuant's minimum data-quality criteria."); return
-    if len(qualified) < 10:
-        st.info(f"Only {len(qualified)} stocks meet the minimum data-quality "
-                f"criteria, so the table is shorter than ten.")
 
-    top = qualified.head(10)
     months = "6" if horizon == "6m" else "12"
-    reliability = artifact.get("reliability", {}).get("label", "Unknown")
-    inputs = len(artifact.get("feature_names", []))
-    st.markdown(f"#### Top {len(top)} — {months} month outlook")
+    risk_edge = bool((risk_artifact or {}).get("has_edge", False))
+    return_edge = bool((artifact or {}).get("has_edge", False))
+    swings = f"{months}M positive return"
+
+    st.markdown(f"#### {len(qualified)} companies")
+    st.caption("Click any column heading to sort by it. Nothing is ranked for "
+               "you, because only one of these two estimates passed its test.")
     st.dataframe(pd.DataFrame({
-        "Rank": range(1, len(top) + 1),
-        "Ticker": top.ticker.to_numpy(),
-        "Company": top.company_name.to_numpy(),
-        "Probability up": [f"{v * 100:.0f}%" for v in top.probability],
-        "Risk": top.risk.to_numpy(),
-        "Trend": top.trend.to_numpy(),
-        "Data quality": [f"{v * 100:.0f}%" for v in top.data_quality],
+        "Ticker": qualified.ticker.to_numpy(),
+        "Company": qualified.company_name.to_numpy(),
+        "Bigger swings than average": qualified.risk_probability.to_numpy() * 100,
+        "Swing last year": qualified.volatility.to_numpy() * 100,
+        swings: qualified.probability.to_numpy() * 100,
+        "Trend": qualified.trend.to_numpy(),
+        "Data quality": qualified.data_quality.to_numpy() * 100,
     }), width="stretch", hide_index=True, column_config={
-        "Rank": st.column_config.NumberColumn(width="small",
-                                              help=nq.TOOLTIPS["rank"]),
         "Ticker": st.column_config.TextColumn(width="small",
                                               help=nq.TOOLTIPS["ticker"]),
         "Company": st.column_config.TextColumn(width="large",
                                                help=nq.TOOLTIPS["company"]),
-        "Probability up": st.column_config.TextColumn(
-            help=nq.TOOLTIPS["probability"]),
-        "Risk": st.column_config.TextColumn(help=nq.TOOLTIPS["risk_column"]),
+        "Bigger swings than average": st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["risk_probability"]),
+        "Swing last year": st.column_config.NumberColumn(
+            format="\u00b1%.1f%%", help=nq.TOOLTIPS["swing_year"]),
+        swings: st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["probability"]),
         "Trend": st.column_config.TextColumn(help=nq.TOOLTIPS["trend"]),
-        "Data quality": st.column_config.TextColumn(
-            help=nq.TOOLTIPS["data_quality"])})
+        "Data quality": st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["data_quality"])})
 
-    # Reliability is a property of the model, not of a row, so repeating it
-    # down every line of the table only made the columns narrower.
-    note(f"<strong>How to read this table.</strong> Stocks are ranked by the "
-         f"machine learning model's estimated probability of a positive return "
-         f"over the horizon. "
-         f"Machine learning model reliability for this horizon is "
-         f"<strong>{reliability}</strong>, "
-         f"and it applies to every row equally. Risk and trend are measured "
-         f"from price history alone, independently of the machine learning model, "
-         f"because a high "
-         f"probability does not automatically mean low risk."
-         f"<br><br><strong>Data quality</strong> is the share of the "
-         f"{inputs} inputs the machine learning model reads that "
-         f"are actually present for that company this period — {inputs} "
-         f"of {inputs} is 100%. It measures the company's filing, "
-         f"not the model: a company can score 100% and still sit under a model "
-         f"with no measurable edge, which is the case here. It is shown because "
-         f"a probability built on half the inputs deserves less weight than one "
-         f"built on all of them, and NusaQuant refuses to score a company at all "
-         f"below {nq.MIN_DATA_COMPLETENESS:.0%} — those appear under "
-         f"<em>Excluded by quality gates</em> rather than in the ranking.")
+    inputs = len(((artifact or risk_artifact) or {}).get("feature_names", []))
+    tested = nq._to_float(((risk_artifact or {}).get("validation_metrics") or {})
+                          .get("roc_auc"))
+    folds = (risk_artifact or {}).get("validation_folds", 0)
+    risk_line = (f"passed its test: over {folds} periods it had never seen it was "
+                 f"right about {tested:.0%} of the time. It is still a weak edge, "
+                 f"and it says nothing about direction \u2014 a company can be "
+                 f"turbulent while rising. "
+                 if risk_edge else "did not pass its test on this snapshot. ")
+    return_line = ("carries a measurable edge on this snapshot. " if return_edge else
+                   "<strong>did not pass its test.</strong> Over the periods "
+                   "checked it sorted risers above fallers no better than chance, "
+                   "so sorting by that column orders the table by something that "
+                   "was not shown to work. It is here so you can see what was "
+                   "tested, not as a shortlist. ")
+    note(f"<strong>The two estimates are not equally good, and that difference "
+         f"matters more than either number.</strong>"
+         f"<br><br><em>Bigger swings than average</em> {risk_line}"
+         f"<br><br><em>{swings}</em> {return_line}"
+         f"<br><br><em>Swing last year</em> and <em>Trend</em> come from price "
+         f"history alone, with no model involved. <em>Data quality</em> is the "
+         f"share of the {inputs} inputs actually present for that company this "
+         f"period; NusaQuant refuses to score a company below "
+         f"{nq.MIN_DATA_COMPLETENESS:.0%}, and those appear under "
+         f"<em>Excluded by quality gates</em> instead.")
 
-    excluded = ranked[~ranked.eligible]
+    if not controls["offline"]:
+        st.caption("The swing and turbulence columns need daily price history, "
+                   "which live mode does not fetch here. Switch to the cached "
+                   "snapshot to see them filled in.")
+
+    excluded = screened[~screened.eligible]
     if not excluded.empty:
         with st.expander(f"Excluded by quality gates ({len(excluded)})"):
             st.dataframe(excluded[["ticker", "company_name", "reason"]],
@@ -1829,7 +1838,7 @@ def main() -> None:
     elif controls["mode"] == MODE_SECTOR:
         render_sector_ranking(controls)
     else:
-        render_best_10(companies, models, controls)
+        render_screening(companies, models, controls)
     footer()
 
 
