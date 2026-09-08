@@ -315,13 +315,23 @@ def get_companies(api_key: str, *, where: str | None = None,
                   order_by: str = "-market_cap", limit: int = 50) -> pd.DataFrame:
     """The IDX universe from the screener: symbol and name, 1 credit."""
     payload = api_request("companies/", api_key,
-                          {"where": where, "order_by": order_by, "limit": min(limit, 200)})
+                          {"where": where, "order_by": order_by,
+                           "limit": min(limit, 200),
+                           "include_query_values": "true"})
     rows = payload.get("results", []) if isinstance(payload, dict) else []
     if not rows:
-        return pd.DataFrame(columns=["symbol", "company_name"])
-    frame = pd.DataFrame(rows)
-    frame["symbol"] = frame["symbol"].map(normalise_symbol)
-    return frame[["symbol", "company_name"]].drop_duplicates("symbol").reset_index(drop=True)
+        return pd.DataFrame(columns=["symbol", "company_name", "market_cap"])
+    records = []
+    for row in rows:
+        values = row.get("query_values") or {}
+        records.append({
+            "symbol": normalise_symbol(row.get("symbol", "")),
+            "company_name": row.get("company_name"),
+            # Named by the market-cap filter, so it comes back for free.
+            "market_cap": _to_float(values.get("market_cap",
+                                               row.get("market_cap")))})
+    frame = pd.DataFrame(records)
+    return frame.drop_duplicates("symbol").reset_index(drop=True)
 
 
 #: The classification columns a screen can attach to each company.
@@ -395,6 +405,12 @@ def get_company_classification(api_key: str, *, where: str | None = None,
             # The endpoint has been seen to key these either at the top level
             # or inside query_values, so both are accepted.
             record[field] = values.get(field, row.get(field))
+        # The filter names market_cap, so include_query_values returns it at no
+        # extra cost. It was being parsed away and thrown out, which left the
+        # universe with no way to order itself and the next purchase picking
+        # companies alphabetically.
+        record["market_cap"] = _to_float(values.get("market_cap",
+                                                    row.get("market_cap")))
         if dividends:
             for source, target in DIVIDEND_FIELDS.items():
                 record[target] = _to_float(values.get(source, row.get(source)))
@@ -607,6 +623,35 @@ def cache_as_of(base: str = "data") -> str:
         latest = pd.to_datetime(frame["report_date"]).max()
         newest = latest if newest is None or latest > newest else newest
     return "unknown" if newest is None else f"{newest:%Y-%m-%d}"
+
+
+def by_market_cap(universe: pd.DataFrame) -> pd.DataFrame:
+    """Largest first, when the screen recorded a size to sort by.
+
+    The screener asks for ``order_by=-market_cap`` and returns the companies
+    alphabetically anyway, so the order has to be imposed here. Without it the
+    universe stayed in symbol order and the next companies bought were the
+    ones beginning with A — 495 credits spent on an alphabet.
+
+    A universe screened before market cap was kept has none, and is returned
+    untouched rather than reordered on a column of blanks. Callers show the
+    difference rather than papering over it.
+    """
+    if universe is None or universe.empty or "market_cap" not in universe:
+        return universe if universe is not None else pd.DataFrame()
+    caps = pd.to_numeric(universe["market_cap"], errors="coerce")
+    if not caps.notna().any():
+        return universe.reset_index(drop=True)
+    return (universe.assign(_cap=caps)
+            .sort_values("_cap", ascending=False, na_position="last")
+            .drop(columns="_cap").reset_index(drop=True))
+
+
+def universe_is_ordered(universe: pd.DataFrame) -> bool:
+    """Whether this universe can be put in size order at all."""
+    return (universe is not None and not universe.empty
+            and "market_cap" in universe
+            and pd.to_numeric(universe["market_cap"], errors="coerce").notna().any())
 
 
 def merge_universe(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:

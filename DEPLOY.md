@@ -106,6 +106,8 @@ perusahaan sekaligus):
 python train.py --screen
 ```
 
+**Jalankan ini sebelum memperluas universe.** Screener Sectors mengembalikan daftarnya secara alfabetis meski diminta urut market cap, jadi tanpa langkah ini perusahaan berikutnya yang dibeli adalah yang berawalan A — bukan yang terbesar. Screen ini merekam market cap sehingga urutannya bisa diperbaiki. `--dry-run` akan memperingatkan kalau langkah ini terlewat.
+
 Jalankan ulang kapan pun angka dividennya perlu disegarkan; klasifikasinya tidak
 basi. Tanpa ini, chip sektor dan rincian sektor pada Portfolio Analysis
 tidak akan muncul.

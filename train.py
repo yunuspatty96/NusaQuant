@@ -157,6 +157,9 @@ def _prioritise_cached(universe: pd.DataFrame, target: int) -> pd.DataFrame:
     """
     if universe.empty:
         return universe
+    # The caller has already put this in size order where it could, so "fresh"
+    # below is largest-first and head() takes the biggest rather than the
+    # alphabetically earliest.
     cached = set(nq.cached_tickers("quarterly"))
     is_cached = universe["symbol"].map(nq.normalise_symbol).isin(cached)
     already, fresh = universe[is_cached], universe[~is_cached]
@@ -285,6 +288,16 @@ def collect(api_key: str, plan: dict, force: bool = False):
         nq.cache_universe(universe)
     else:
         print("\nUniverse loaded from cache (0 credits).")
+    # Largest first, then trim. The screener is asked for -market_cap and
+    # returns the list alphabetically regardless, so without this the companies
+    # bought next are simply the ones beginning with A.
+    if nq.universe_is_ordered(universe):
+        universe = nq.by_market_cap(universe)
+    else:
+        print("  This universe was screened before market cap was recorded, so "
+              "it cannot be put in size order.")
+        print("  Run `python train.py --screen` first — one credit — or the "
+              "companies bought below will be taken alphabetically.")
     universe = _prioritise_cached(universe, target)
     print(f"  {len(universe)} companies")
 
@@ -956,6 +969,13 @@ def main() -> int:
         return 1
 
     if args.dry_run:
+        # The dry run is where the spend is approved, so the one thing that
+        # would misdirect it belongs here rather than only in collect().
+        if plan["new_companies"] and not nq.universe_is_ordered(nq.load_universe()):
+            print("\nWARNING: the stored universe carries no market cap, so the")
+            print("companies bought would be taken in alphabetical order, not")
+            print("by size. Run `python train.py --screen` first — one credit —")
+            print("to record it, then re-run this plan.")
         print("\nDry run — nothing fetched, no credits spent.")
         return 0
 

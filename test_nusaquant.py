@@ -127,6 +127,33 @@ check("no gross profit line where none is reported",
       or _bank_series.gross_profit.isna().all(),
       "a gross profit appeared for a filer that reports none")
 
+import train  # noqa: E402  (needed by the ordering checks)
+
+# The screener is asked for -market_cap and returns the list alphabetically
+# anyway, so the order has to be imposed. Without it the companies bought next
+# are the ones beginning with A, which is 495 credits spent on an alphabet.
+_screened = pd.DataFrame({
+    "symbol": ["AAAA.JK", "BBBB.JK", "ZZZZ.JK"],
+    "company_name": ["Alphabetically first, tiny", "Middle", "Last letter, huge"],
+    "market_cap": [1e12, 5e13, 9e14]})
+check("the universe can be put in size order",
+      nq.universe_is_ordered(_screened))
+check("largest company comes first",
+      list(nq.by_market_cap(_screened).symbol)[0] == "ZZZZ.JK",
+      str(list(nq.by_market_cap(_screened).symbol)))
+check("buying from an ordered universe takes the biggest",
+      list(train._prioritise_cached(nq.by_market_cap(_screened), 2).symbol)
+      == ["ZZZZ.JK", "BBBB.JK"],
+      str(list(train._prioritise_cached(nq.by_market_cap(_screened), 2).symbol)))
+
+# A universe screened before the market cap was kept must be reported as
+# unorderable rather than silently sorted on a column of blanks.
+_old = _screened.drop(columns="market_cap")
+check("a universe with no market cap says so",
+      not nq.universe_is_ordered(_old))
+check("and is left alone rather than reordered",
+      list(nq.by_market_cap(_old).symbol) == list(_old.symbol))
+
 check("bank-only ratios are not listed",
       not any(f.name in ("npl", "ldr", "nim") for f in nq.FEATURE_SCHEMA))
 # A screener snapshot must never reach training. Feeding today's trailing yield

@@ -2084,6 +2084,10 @@ def main() -> None:
             show_error(error); return
         if companies.empty:
             st.error("The Sectors universe came back empty."); return
+        # The screener returns these alphabetically whatever order_by asks for,
+        # and every size control on the page says "largest first". It now
+        # carries a market cap, so the claim can be made true here too.
+        companies = nq.by_market_cap(companies)
 
     if controls["mode"] == MODE_SINGLE:
         render_single_stock(companies, models, controls)
