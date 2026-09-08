@@ -1,4 +1,4 @@
-# NusaQuant
+# NusaQuant - IDX Machine Learning Market Intelligence
 
 > **Problem statement.** NusaQuant is for retail investors and researchers on
 > the Indonesia Stock Exchange who need to know how much a holding is likely
