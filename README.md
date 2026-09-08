@@ -28,20 +28,12 @@ log loss.
 
 ## See it
 
-<!-- Replace with your Streamlit Cloud URL once deployed. -->
-**Live dashboard:** _not yet deployed_ · **Deployment steps:** [DEPLOY.md](DEPLOY.md)
+**Live dashboard: [nusaquant.streamlit.app](https://nusaquant.streamlit.app)**
+· Deployment steps: [DEPLOY.md](DEPLOY.md)
 
-<!-- Save a PNG as docs/screenshot.png, then delete the two comment markers
-     around the line below so the image renders. It is left commented until
-     the file exists, because a broken image icon on the front page is worse
-     than no image at all.
-
-     Suggested shot: Single Stock Analysis on a volatile name — BYAN or BREN —
-     scrolled so the price chart and the Risk Analysis section are both in
-     frame. That one view carries the product's whole argument.
-
-![NusaQuant — Single Stock Analysis](docs/screenshot.png)
--->
+It opens in **Cached snapshot** mode, so it runs the whole flow on real
+Sectors data at zero credits and says on screen which date the snapshot was
+taken.
 
 > **DISCLAIMER!** NusaQuant provides quantitative analysis to support research
 > and decision-making. Model probabilities, forecasts, and other analyses are
