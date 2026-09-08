@@ -852,6 +852,17 @@ def render_chart(company: dict, api_key: str,
                         spikecolor=GRID, spikedash="dot")
     st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
+    # These describe the chart, so they sit under the chart. They used to
+    # follow the projected-range table, which put two paragraphs about zooming
+    # and dashed lines between that table and the text explaining it.
+    change = (last / first - 1.0) if first > 0 else np.nan
+    note(f"{nq.format_rupiah(first, compact=False)} \u2192 "
+         f"{nq.format_rupiah(last, compact=False)} "
+         f"({nq.format_percent(change, 1)}) over this window. "
+         f"Drag to zoom, double-click to reset.")
+    if any(levels.get(k) for k in ("support", "resistance")):
+        note("Dashed lines are support (green) and resistance (red).")
+
     if cone.get("available"):
         st.markdown("##### Projected range")
         rows = []
@@ -881,13 +892,6 @@ def render_chart(company: dict, api_key: str,
             note("Volatility here is high enough that the 12M range covers "
                  "almost any outcome. The 6M figure is the usable one.")
 
-    change = (last / first - 1.0) if first > 0 else np.nan
-    note(f"{nq.format_rupiah(first, compact=False)} → "
-         f"{nq.format_rupiah(last, compact=False)} "
-         f"({nq.format_percent(change, 1)}) over this window. "
-         f"Drag to zoom, double-click to reset.")
-    if any(levels.get(k) for k in ("support", "resistance")):
-        note("Dashed lines are support (green) and resistance (red).")
     if cone.get("available"):
         note(nq.EXPLANATIONS["cone"])
     elif project:
@@ -1056,9 +1060,7 @@ def render_income_chart(company: dict) -> None:
 
     detail = ("Cost of revenue" if cost_label == "Cost of revenue"
               else "Operating expense")
-    note(f"Per quarter, not cumulative: filings that report year-to-date are "
-         f"de-cumulated first, so a fourth quarter is one quarter and not the "
-         f"whole year. Cost is shown as <strong>{escape(detail.lower())}</strong> "
+    note(f"Cost is shown as <strong>{escape(detail.lower())}</strong> "
          f"for this company — issuers that do not file a cost of revenue, banks "
          f"among them, are charted on operating expense instead, and the label "
          f"says which.")
@@ -1195,12 +1197,7 @@ def render_return_forecast(predictions: dict, models: dict) -> None:
     note("<strong>These are probabilities, not returns.</strong> 53% means an "
          "estimated 53% chance the price is higher than today in six months. "
          "It says nothing about how much higher \u2014 a 53% reading is not a "
-         "53% gain."
-         "<br><br>Tested on past periods, these fundamentals separated risers "
-         "from fallers no better than chance would have. The figures stay on "
-         "the page because a negative result is still a result, but read them "
-         "as how often shares in this market have risen, not as a view on this "
-         "company.")
+         "53% gain.")
 
     for column, horizon in zip(st.columns(2), nq.HORIZON_TRADING_DAYS):
         months = "6" if horizon == "6m" else "12"
@@ -1585,20 +1582,10 @@ def render_screening(companies: pd.DataFrame, models: dict, controls: dict) -> N
     st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True,
                  column_config=config)
 
-    risk_edge = any((m or {}).get("has_edge") for m in risk_models.values())
-    return_edge = bool((artifact or {}).get("has_edge", False))
     note(f"<strong>Ranked by the {months}M volatility forecast, calmest "
-         f"first</strong> "
-         + ("\u2014 the only estimate here that beat chance out of sample. "
-            if risk_edge else "\u2014 no estimate here beat chance out of "
-            "sample, so the order is for inspection only. ")
-         + ("The return probability "
-            + ("also passed its test. " if return_edge else
-               "<strong>did not</strong>: it sorted risers above fallers no "
-               "better than a coin toss, so it is shown but not ranked on. ")
-            if artifact else "")
-         + "Risk Class is the company's position among all companies on "
-           "file, not an absolute scale. Click any heading to re-sort.")
+         f"first.</strong> Risk Class is the company's position among all "
+         f"companies on file, not an absolute scale. Click any heading to "
+         f"re-sort.")
     if not controls["offline"]:
         st.caption("Volatility columns need daily price history, which live "
                    "mode does not fetch here. Switch to the cached snapshot "
@@ -1972,9 +1959,7 @@ def render_portfolio_return(analysis: dict, models: dict, controls: dict) -> Non
 
     note("<strong>Probabilities, not returns.</strong> 53% means an estimated "
          "53% chance the price is higher than today at the horizon \u2014 not a "
-         "53% gain. Tested on past periods these fundamentals separated risers "
-         "from fallers no better than chance, so read them as how often shares "
-         "in this market have risen rather than as a view on your holdings.")
+         "53% gain.")
     st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True,
                  column_config=config)
 

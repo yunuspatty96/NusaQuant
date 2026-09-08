@@ -792,107 +792,175 @@ class FeatureSpec:
 # an empty row forever. The limitation is recorded in the README instead of
 # occupying six lines of a table nobody can read a number from.
 FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
-    # — 1. Valuation -------------------------------------------------
+    # — Valuation -------------------------------------------------
     FeatureSpec("pe", "P/E", "Valuation",
-                "Price relative to trailing 12-month earnings.", "multiple",
-                "Price to Earnings"),
+                "Years of current profit the price represents. Lower looks "
+                "cheaper, but a low reading often reflects profits the "
+                "market expects to shrink. The broad market sits in the "
+                "mid-teens; banks and utilities usually below, fast growers "
+                "well above. A loss-making company has none, which is why "
+                "the cell is blank rather than zero.",
+                "multiple", "Price to Earnings"),
     FeatureSpec("ps", "P/S", "Valuation",
-                "Price relative to trailing 12-month revenue.", "multiple",
-                "Price to Sales"),
+                "Price against a full year of revenue. Useful where profits "
+                "are thin or negative, since revenue is harder to distort "
+                "than earnings. Below 1 is modest; above 5 assumes strong "
+                "margins are still to come.",
+                "multiple", "Price to Sales"),
     FeatureSpec("pbv", "PBV", "Valuation",
-                "Price relative to book value of equity.", "multiple",
-                "Price to Book Value"),
+                "Price against the accounting value of what shareholders "
+                "own. Below 1 means the market values the company at less "
+                "than its own books — ordinary for banks and asset-heavy "
+                "businesses, a warning elsewhere. Above 3 assumes returns "
+                "well above the cost of capital.",
+                "multiple", "Price to Book Value"),
     FeatureSpec("pcf", "P/CF", "Valuation",
-                "Price relative to trailing 12-month operating cash flow. "
-                "Harder to flatter than earnings.", "multiple",
-                "Price to Cash Flow"),
+                "Price against a year of operating cash flow. Harder to "
+                "flatter than earnings, because cash either arrived or it "
+                "did not. Worth reading beside P/E: a wide gap between the "
+                "two is a question to ask.",
+                "multiple", "Price to Cash Flow"),
     FeatureSpec("ev_ebitda", "EV/EBITDA", "Valuation",
-                "Enterprise value — market cap plus debt, less cash — against "
-                "trailing 12-month EBITDA. Neutral to how a company is financed.",
+                "Enterprise value — market cap plus debt, less cash — "
+                "against a year of EBITDA. Neutral to how a company is "
+                "financed, so it compares a debt-funded business with a "
+                "cash-rich one fairly. Below 8 is undemanding; above 15 is "
+                "not.",
                 "multiple", "Enterprise Value to EBITDA"),
 
-    # — 2. Per Share -------------------------------------------------
-    # Rupiah amounts, so shown but never modelled. The share count is inferred
-    # as market cap divided by close, which is exact on the day it is taken.
+    # — Per Share -------------------------------------------------
     FeatureSpec("eps", "EPS", "Per Share",
-                "Trailing 12-month earnings attributable to one share.",
+                "Trailing 12-month profit attributable to one share, and "
+                "the denominator of P/E. Negative for a loss-making "
+                "company, which is why P/E then has no meaning rather than "
+                "a large one.",
                 "currency", "Earning per Share", modelled=False),
     FeatureSpec("rps", "RPS", "Per Share",
-                "Trailing 12-month revenue per share.",
+                "Trailing 12-month revenue per share. Set against EPS it "
+                "shows how much of each rupiah of sales survives to the "
+                "bottom line.",
                 "currency", "Revenue per Share", modelled=False),
     FeatureSpec("cps", "CPS", "Per Share",
-                "Cash and equivalents held per share.",
+                "Cash and equivalents held per share. Against the share "
+                "price it shows how much of what you pay is already cash "
+                "sitting on the balance sheet.",
                 "currency", "Cash per Share", modelled=False),
     FeatureSpec("bvps", "BVPS", "Per Share",
-                "Book value of equity per share.",
+                "Accounting value of equity per share: assets less "
+                "liabilities, divided by shares outstanding. The "
+                "denominator of PBV.",
                 "currency", "Book Value per Share", modelled=False),
     FeatureSpec("cfps", "CFPS", "Per Share",
-                "Trailing 12-month operating cash flow per share.",
+                "Trailing 12-month operating cash flow per share. "
+                "Persistently below EPS suggests reported profit is not "
+                "converting into cash.",
                 "currency", "Cash Flow per Share", modelled=False),
 
-    # — 3. Solvency --------------------------------------------------
+    # — Solvency --------------------------------------------------
     FeatureSpec("der", "DER", "Solvency",
-                "Total liabilities relative to shareholder equity. The API does "
-                "not separate interest-bearing debt, so this is the broader "
-                "measure.", "multiple", "Debt to Equity"),
+                "Total liabilities against shareholder equity. Above 2 is "
+                "heavy for an industrial company and above 3 leaves little "
+                "room if earnings fall. Banks routinely run 5 to 8 because "
+                "customer deposits are liabilities, so the figure means "
+                "something entirely different there. The API does not "
+                "separate interest-bearing debt, so this is the broader "
+                "measure.",
+                "multiple", "Debt to Equity"),
 
-    # — 4. Profitability ---------------------------------------------
+    # — Profitability ---------------------------------------------
     FeatureSpec("roa", "ROA", "Profitability",
-                "Return generated from total assets.", "percent",
-                "Return on Asset"),
+                "Profit earned per rupiah of assets. Above 5% is solid "
+                "across most industries. Banks and other asset-heavy "
+                "businesses run far lower by nature, often 1 to 2%, without "
+                "that being a weakness.",
+                "percent", "Return on Asset"),
     FeatureSpec("roe", "ROE", "Profitability",
-                "Return generated on shareholder equity.", "percent",
-                "Return on Equity"),
+                "Profit earned per rupiah of shareholder equity. Sustained "
+                "above 15% is strong; below the cost of equity — roughly 12 "
+                "to 13% for Indonesian shares — a company erodes value even "
+                "while reporting a profit. A high ROE built on heavy "
+                "borrowing is more fragile than the number looks, so read "
+                "it beside DER.",
+                "percent", "Return on Equity"),
     FeatureSpec("gpm", "GPM", "Profitability",
-                "Revenue left after the direct cost of producing it.", "percent",
-                "Gross Profit Margin"),
+                "Revenue left after the direct cost of producing it. "
+                "Strongly sector-bound: software and branded consumer goods "
+                "run above 40%, distributors and contractors in single "
+                "digits. The trend and the comparison with direct peers "
+                "matter more than the level.",
+                "percent", "Gross Profit Margin"),
     FeatureSpec("opm", "OPM", "Profitability",
-                "Revenue left after operating costs, before financing and tax.",
+                "Revenue left after operating costs, before financing and "
+                "tax. Shows whether the core business is profitable "
+                "regardless of how it is funded. Above 15% is comfortable "
+                "in most sectors.",
                 "percent", "Operating Profit Margin"),
     FeatureSpec("npm", "NPM", "Profitability",
-                "Profit generated per unit of revenue.", "percent",
-                "Net Profit Margin"),
+                "Profit left from each rupiah of revenue after every cost. "
+                "Above 10% is healthy for most industries, though commodity "
+                "traders and retailers operate on far less by design.",
+                "percent", "Net Profit Margin"),
 
-    # — 5. Dividend ---------------------------------------------------
-    # Trailing figures from the screener, not point-in-time history. Shown,
-    # never modelled — see FeatureSpec.point_in_time.
+    # — Dividend --------------------------------------------------
     FeatureSpec("dividend", "Dividend", "Dividend",
-                "Cash paid per share over the trailing twelve months.",
+                "Cash paid per share over the trailing twelve months. A "
+                "record of what was paid, not a commitment — a company can "
+                "cut or suspend it at any time.",
                 "currency", "", modelled=False, point_in_time=False),
     FeatureSpec("dpr", "DPR", "Dividend",
-                "Share of earnings paid out rather than retained.", "percent",
-                "Dividend Payout Ratio", modelled=False, point_in_time=False),
+                "Share of profit paid out rather than reinvested. Between "
+                "30% and 60% is a common balance between rewarding holders "
+                "and funding growth. Above 100% means paying out more than "
+                "was earned, which cannot continue indefinitely.",
+                "percent", "Dividend Payout Ratio", modelled=False, point_in_time=False),
     FeatureSpec("dividend_yield", "Dividend Yield", "Dividend",
-                "Trailing dividend against the current price.", "percent", "",
-                modelled=False, point_in_time=False),
+                "Trailing dividend against the current price. The IDX broad "
+                "average sits around 3 to 4%. An unusually high yield more "
+                "often means the price has fallen than that the dividend "
+                "has risen.",
+                "percent", "", modelled=False, point_in_time=False),
 
-    # — 6. Income Statement ------------------------------------------
+    # — Income Statement ------------------------------------------
     FeatureSpec("revenue", "Revenue", "Income Statement",
-                "Trailing 12-month revenue.", "currency", "", modelled=False),
+                "Total sales over the trailing twelve months, before any "
+                "costs are taken out. The top line every margin is measured "
+                "against.",
+                "currency", "", modelled=False),
     FeatureSpec("gross_profit", "Gross Profit", "Income Statement",
-                "Trailing 12-month revenue less the direct cost of producing it.",
+                "Revenue less the direct cost of producing it — what is "
+                "left to cover salaries, marketing, interest and tax.",
                 "currency", "", modelled=False),
     FeatureSpec("ebitda", "EBITDA", "Income Statement",
-                "Trailing 12-month earnings before interest, tax, depreciation "
-                "and amortisation.", "currency",
-                "Earnings Before Interest, Tax, Depreciation and Amortisation",
-                modelled=False),
+                "Earnings before interest, tax, depreciation and "
+                "amortisation. A rough proxy for cash generated by "
+                "operations, used because it compares companies with "
+                "different debt loads and asset bases on similar terms.",
+                "currency", "Earnings Before Interest, Tax, Depreciation and Amortisation", modelled=False),
     FeatureSpec("net_income", "Net Income", "Income Statement",
-                "Trailing 12-month profit after everything.", "currency", "",
-                modelled=False),
+                "Profit remaining after every cost, financing charge and "
+                "tax. The figure EPS is built from, and the one a P/E "
+                "multiplies.",
+                "currency", "", modelled=False),
 
-    # — 7. Balance Sheet ---------------------------------------------
+    # — Balance Sheet ---------------------------------------------
     FeatureSpec("cash", "Cash", "Balance Sheet",
-                "Cash and equivalents at the reporting date.", "currency", "",
-                modelled=False),
+                "Cash and equivalents at the reporting date. Set against "
+                "total liabilities it shows how much immediate cover the "
+                "company holds.",
+                "currency", "", modelled=False),
     FeatureSpec("total_assets", "Total Assets", "Balance Sheet",
-                "Everything the company owns at the reporting date.", "currency",
-                "", modelled=False),
+                "Everything the company owns at the reporting date, from "
+                "factories and inventory to loans a bank has made.",
+                "currency", "", modelled=False),
     FeatureSpec("total_liabilities", "Total Liabilities", "Balance Sheet",
-                "Everything the company owes at the reporting date.", "currency",
-                "", modelled=False),
+                "Everything the company owes at the reporting date — for a "
+                "bank, that includes customer deposits, which is why bank "
+                "leverage looks extreme beside an industrial.",
+                "currency", "", modelled=False),
     FeatureSpec("total_equity", "Total Equity", "Balance Sheet",
-                "What is left for shareholders: assets less liabilities.",
+                "Assets less liabilities: what would remain for "
+                "shareholders if everything were settled at book value. The "
+                "figure behind PBV.",
                 "currency", "", modelled=False),
 )
 

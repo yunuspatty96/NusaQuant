@@ -1,5 +1,5 @@
 """Full test of the rebuilt NusaQuant. SYNTHETIC fake API — no real IDX data."""
-import sys, os, warnings, tempfile, shutil, subprocess, json
+import sys, os, re, warnings, tempfile, shutil, subprocess, json
 from pathlib import Path
 SRC = Path(__file__).resolve().parent
 HOME = Path.cwd()
@@ -70,6 +70,20 @@ check("rupiah amounts are shown but never modelled",
       not any(f.modelled for f in nq.FEATURE_SCHEMA if f.unit == "currency"))
 # The banking ratios stay out: nothing this project fetches can produce them.
 # Dividends came back once the screener proved able to supply them.
+# A definition alone leaves a reader where they started: "ROE 12%" means
+# nothing without knowing that 15% is strong. The ratios are the ones a reader
+# judges a company by, so those are the ones that must carry a reference level.
+_ratios = [f for f in nq.FEATURE_SCHEMA if f.unit in ("percent", "multiple")]
+_benchmarked = [f for f in _ratios
+                if re.search(r"\b(above|below|between)\b|\d\s?%", f.meaning, re.I)]
+check("ratio meanings carry a reference level",
+      len(_benchmarked) >= len(_ratios) * 0.7,
+      f"{len(_benchmarked)} of {len(_ratios)}: missing "
+      + ", ".join(f.label for f in _ratios if f not in _benchmarked))
+check("every meaning says more than a single clause",
+      all(len(f.meaning) > 70 for f in nq.FEATURE_SCHEMA),
+      ", ".join(f.label for f in nq.FEATURE_SCHEMA if len(f.meaning) <= 70))
+
 check("bank-only ratios are not listed",
       not any(f.name in ("npl", "ldr", "nim") for f in nq.FEATURE_SCHEMA))
 # A screener snapshot must never reach training. Feeding today's trailing yield
@@ -94,7 +108,6 @@ os.environ["SECTORS_API_KEY"] = "GOODKEY"
 check("key read from environment", nq.get_api_key() == "GOODKEY")
 check("explicit key wins", nq.get_api_key("OTHER") == "OTHER")
 src = (WORK / "nusaquant.py").read_text(encoding="utf-8") + (WORK / "train.py").read_text(encoding="utf-8") + (WORK / "app.py").read_text(encoding="utf-8")
-import re
 check("no hard-coded key literal in source",
       not re.search(r'api_key\s*=\s*["\'][A-Za-z0-9_\-]{12,}["\']', src))
 check("key never printed", not re.search(r'print\([^)]*api_key', src))
@@ -492,6 +505,30 @@ check("return and volatility read as a matched pair",
 # Selected by its own class: the projected-range table shares nq-table.
 feat = [str(m.value) for m in at.markdown if "nq-metrics" in str(m.value)]
 check("feature table rendered", len(feat) == 1, f"{len(feat)} tables")
+if feat:
+    # Group headers are <tr class='grp'>, which does not match "<tr>", so only
+    # the plain metric rows and the one header row are counted.
+    rows = feat[0].count("<tr>") - 1
+    check("metric table lists every metric", rows == len(nq.METRIC_NAMES),
+          f"{rows} of {len(nq.METRIC_NAMES)}")
+    check("metric table is grouped by category",
+          feat[0].count("<tr class='grp'>") == len(nq.CATEGORY_ORDER))
+    check("acronyms are expanded", all(x in feat[0] for x in
+          ("Return on Equity", "Return on Asset", "Price to Earnings",
+           "Price to Book Value", "Price to Sales", "Price to Cash Flow",
+           "Enterprise Value to EBITDA", "Debt to Equity")))
+    check("an absent metric still says why", "Not available." in feat[0])
+    check("the metric table no longer carries an In model column",
+          "In model" not in feat[0])
+    # A definition alone leaves a reader where they started. The Meaning column
+    # has to carry a reference point they can judge their own number against.
+    _cells = re.findall(r"<td class='[^']*'>([^<]+)</td>", feat[0])
+    check("meanings run past a one-line definition",
+          sum(1 for c in _cells if len(c) > 80) >= len(nq.METRIC_NAMES) * 0.7,
+          f"{sum(1 for c in _cells if len(c) > 80)} of {len(nq.METRIC_NAMES)}")
+    check("meanings run past a one-line definition",
+          sum(1 for c in _cells if len(c) > 80) >= 10,
+          f"{sum(1 for c in _cells if len(c) > 80)} long cells")
 
 check("STILL zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 
