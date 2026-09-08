@@ -1429,18 +1429,44 @@ def render_about(models: dict, metadata: dict) -> None:
     rows = metadata.get("dataset_rows") or 0
     as_of = metadata.get("snapshot_as_of") or snapshot_as_of()
 
-    st.markdown("#### What NusaQuant is")
-    note(f"A research dashboard for the Indonesia Stock Exchange, built on "
-         f"{tickers} of the largest listed companies. It reads their filings "
-         f"and price history, computes {len(nq.METRIC_NAMES)} fundamental "
-         f"metrics from the raw statements, and puts two machine learning "
-         f"questions to the same data: how much a share is likely to move, and "
-         f"which way."
-         f"<br><br>It answers the first and reports honestly that it cannot "
-         f"answer the second. That is the whole design. A dashboard that only "
-         f"showed what worked would leave you no way to judge how hard it "
-         f"looked, so both results are on the page, each labelled with what it "
-         f"actually scored when tested on periods it had never seen.")
+    st.markdown("#### IDX Machine Learning Market Intelligence")
+    note("Three parts to the name, and each one is doing work. Here is what "
+         "they mean in this product.")
+
+    columns = st.columns(3)
+    with columns[0]:
+        st.markdown("**IDX**")
+        note(f"{tickers} of the largest companies on the Indonesia Stock "
+             f"Exchange, screened above a market-cap floor and taken largest "
+             f"first. Roughly six years of daily prices and "
+             f"{rows:,} quarterly observations, rebuilt into a "
+             f"point-in-time panel where a filing counts as unknown for "
+             f"{nq.REPORTING_LAG_DAYS} days after its reporting date. Nothing "
+             f"is scraped, estimated or hand-entered: every figure traces to a "
+             f"Sectors endpoint.")
+    with columns[1]:
+        st.markdown("**Machine Learning**")
+        note(f"Four models, each selected per horizon from four candidates on "
+             f"out-of-sample log loss. Two forecast how much a share will "
+             f"move; two forecast which way. They read "
+             f"{len(nq.METRIC_NAMES)} fundamental metrics computed from raw "
+             f"statements plus features derived from the price bars, and "
+             f"every one is validated on quarters it never saw during "
+             f"training.")
+    with columns[2]:
+        st.markdown("**Market Intelligence**")
+        note("Not a screener that prints ratios. The universe arrives ranked "
+             "by a tested forecast, each company carries a risk class against "
+             "its peers, and holdings can be measured together — the "
+             "covariance between them being the one thing no per-stock page "
+             "can show.")
+
+    note(f"<strong>What makes it intelligence rather than output:</strong> "
+         f"every number here arrives with the score it earned. Of the four "
+         f"models, two cleared the {nq.MIN_EDGE_AUC:.2f} threshold and two did "
+         f"not, and all four are on the page carrying their own result. A "
+         f"dashboard showing only what worked would give you no way to judge "
+         f"how hard it looked before it found something.")
 
     st.markdown("#### Who built it")
     note("<strong>Patty Kyoudai</strong><br>Yunus Patty<br>Lukas Patty")

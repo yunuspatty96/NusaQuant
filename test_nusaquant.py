@@ -720,7 +720,8 @@ check("about page opens", not at.exception,
       str(at.exception)[:300] if at.exception else "")
 _about = " ".join(m.value for m in at.markdown)
 check("about page covers the method",
-      all(h in _about for h in ("What NusaQuant is", "Who built it",
+      all(h in _about for h in ("IDX Machine Learning Market Intelligence",
+                                "Who built it",
                                 "The models", "How it is validated",
                                 "How the models were trained",
                                 "Cached snapshot and Live mode")),
@@ -734,6 +735,12 @@ check("no unsupportable claims about other products",
 # The rules require a one-sentence problem statement naming who the product is
 # for and what it solves. It was briefly lost when an overclaim was cut out of
 # the same paragraph.
+# The page opens by explaining what the product is called and why, rather than
+# by leading with what it could not do.
+check("about page explains its own name",
+      all(part in _about for part in ("**IDX**", "**Machine Learning**",
+                                      "**Market Intelligence**")),
+      "the overview no longer unpacks the product name")
 check("about page states the problem and the audience",
       "The problem" in _about and "retail investors" in _about.lower()
       and "researchers" in _about.lower(),
