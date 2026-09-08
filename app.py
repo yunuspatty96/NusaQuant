@@ -1042,6 +1042,16 @@ def render_income_chart(company: dict) -> None:
             x=frame["report_date"], y=frame["cost"], name=cost_label,
             marker={"color": COST},
             hovertemplate="Rp %{y:,.0f}<extra>" + cost_label + "</extra>"))
+    # Two bars for the gross quantities, two lines for the profit chain that
+    # descends between them. A reader can now see that gross profit sits at
+    # the top of the gap and net income well below it, which is the thing a
+    # paragraph underneath was previously asked to explain.
+    if "gross_profit" in frame and frame["gross_profit"].notna().any():
+        figure.add_trace(go.Scatter(
+            x=frame["report_date"], y=frame["gross_profit"], name="Gross profit",
+            mode="lines+markers", line={"color": MUTED, "width": 2, "dash": "dot"},
+            marker={"size": 5},
+            hovertemplate="Rp %{y:,.0f}<extra>Gross profit</extra>"))
     figure.add_trace(go.Scatter(
         x=frame["report_date"], y=frame["net_income"], name="Net income",
         mode="lines+markers", line={"color": POSITIVE, "width": 2},
@@ -1060,14 +1070,16 @@ def render_income_chart(company: dict) -> None:
 
     detail = ("Cost of revenue" if cost_label == "Cost of revenue"
               else "Operating expense")
-    # Three bars in a row invite the reading that the third is the difference
-    # between the first two. It is not, and the gap is large: ICBP's revenue
-    # less cost is 6.8T against net income of 1.1T. Saying so is cheaper than
-    # letting every reader work it out or, worse, not notice.
-    note(f"<strong>Revenue less cost is gross profit, not net income.</strong> "
-         f"Salaries, marketing, interest and tax come out after that, which is "
-         f"why the third bar is smaller than the gap between the first two."
-         f"<br><br>Cost is shown here as "
+    has_gross = "gross_profit" in frame and frame["gross_profit"].notna().any()
+    chain = ("Gross profit is what revenue leaves after the direct cost of "
+             "producing it. Net income is what survives after that \u2014 "
+             "salaries, marketing, interest and tax all come out in between, "
+             "which is why the two lines sit so far apart. "
+             if has_gross else
+             "This company reports no cost of revenue and so has no gross "
+             "profit to plot. Net income is what remains after every cost, "
+             "interest and tax. ")
+    note(chain + f"<br><br>Cost is shown here as "
          f"<strong>{escape(detail.lower())}</strong>. Companies that do not "
          f"report a cost of revenue, banks among them, are charted on "
          f"operating expense instead.")

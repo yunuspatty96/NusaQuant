@@ -96,6 +96,37 @@ _leaked = [t for t in _facing
 check("no developer detail in anything the reader sees",
       not _leaked, _leaked[0][:90] if _leaked else "")
 
+# The income chart shows the profit chain, and gross profit must come from the
+# filing rather than from revenue minus cost. The two agree on real data, so a
+# panel where they would disagree is the only way to tell which is being used.
+_income = pd.DataFrame({
+    "report_date": pd.date_range("2024-03-31", periods=6, freq="QE"),
+    "revenue": [100.0] * 6,
+    "cost_of_revenue": [60.0] * 6,
+    "gross_profit": [35.0] * 6,          # not 100 - 60; the filing wins
+    "earnings": [10.0] * 6,
+    "total_assets": [500.0] * 6, "total_equity": [200.0] * 6,
+    "total_liabilities": [300.0] * 6,
+})
+_series = nq.income_statement_series(_income)
+check("the income chart carries a gross profit column",
+      "gross_profit" in _series, ", ".join(_series.columns))
+if "gross_profit" in _series:
+    _last = _series.gross_profit.dropna()
+    check("gross profit is the reported figure, not revenue minus cost",
+          len(_last) and abs(_last.iloc[-1] - 35.0) < 1e-6,
+          f"got {_last.iloc[-1] if len(_last) else 'nothing'}, expected 35")
+
+# A company filing no cost of revenue has no gross profit, and the chart must
+# leave the line out rather than inventing one.
+_bank = _income.drop(columns=["cost_of_revenue", "gross_profit"])
+_bank["operating_expense"] = [25.0] * 6
+_bank_series = nq.income_statement_series(_bank)
+check("no gross profit line where none is reported",
+      "gross_profit" not in _bank_series
+      or _bank_series.gross_profit.isna().all(),
+      "a gross profit appeared for a filer that reports none")
+
 check("bank-only ratios are not listed",
       not any(f.name in ("npl", "ldr", "nim") for f in nq.FEATURE_SCHEMA))
 # A screener snapshot must never reach training. Feeding today's trailing yield

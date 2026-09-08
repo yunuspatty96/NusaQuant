@@ -1202,10 +1202,16 @@ def income_statement_series(quarterly: pd.DataFrame) -> pd.DataFrame:
     else:
         cost, cost_label = pd.Series(np.nan, index=panel.index), "Cost"
 
+    # Gross profit as the company reported it, never revenue minus cost. Where
+    # both exist the two agree to the rupiah, and where they disagree the
+    # filing is right and the subtraction is missing something. It is also the
+    # honest way to end up with nothing for a bank, which files no cost of
+    # revenue and therefore has no gross profit to plot.
     frame = pd.DataFrame({
         "report_date": panel["report_date"],
         "revenue": panel.get("revenue"),
         "cost": cost,
+        "gross_profit": panel.get("gross_profit"),
         "net_income": panel.get("earnings"),
     }).dropna(subset=["revenue"], how="all")
     frame.attrs["cost_label"] = cost_label

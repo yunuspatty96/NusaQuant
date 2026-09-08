@@ -217,7 +217,7 @@ The single-stock page runs in this order:
 | Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
 | Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
 | Market Conditions | A 52-week range strip with today's price marked, plus volume and movement against the stock's own normal |
-| Revenue vs Cost vs Net Income | Per quarter, de-cumulated |
+| Income Statement | Revenue and cost as bars, gross profit and net income as lines, per quarter and de-cumulated |
 | Fundamental metrics | All twenty-seven, grouped by category |
 | Risk Analysis | The 6M and 12M volatility forecasts with what each scored, then measured volatility, drawdown, downside volatility and turnover |
 | Return outlook | The 6- and 12-month probabilities, under a heading that says the test found nothing |
