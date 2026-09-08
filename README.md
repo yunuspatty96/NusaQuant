@@ -1,9 +1,7 @@
 # NusaQuant
 
-**Investors are told what a share might return. They are almost never told how
-much it will move on the way, or how confident anyone actually is. NusaQuant
-answers the question the data can answer, and says plainly when it cannot
-answer the one everybody asks.**
+**Every forecast here reports how well it was tested. One of them failed the
+test, and it says so on the page.**
 
 An IDX research dashboard built entirely on the
 [Sectors Financial API v2](https://docs.sectors.app/). It forecasts how much a

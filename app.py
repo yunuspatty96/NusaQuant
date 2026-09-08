@@ -1446,12 +1446,15 @@ def render_about(models: dict, metadata: dict) -> None:
     note("<strong>Patty Kyoudai</strong><br>Yunus Patty<br>Lukas Patty")
 
     st.markdown("#### Why it exists")
-    note("<strong>The problem.</strong> Investors are told what a share might "
-         "return. They are almost never told how much it will move on the way, "
-         "or how confident anyone actually is in either number. NusaQuant is "
-         "for retail investors and researchers on the IDX who want the "
-         "question the data can answer, and want to be told plainly when it "
-         "cannot answer the one everybody asks."
+    # An earlier draft opened by claiming investors are almost never told how
+    # much a share will move. That is simply false — volatility is among the
+    # most widely published figures in finance — and an unsupportable claim
+    # about other products is the last thing a project built on measured
+    # honesty should lead with.
+    note("<strong>Who this is for.</strong> Retail investors and researchers "
+         "on the IDX who want to know how much a holding is likely to move, "
+         "and want to be told how much confidence that estimate has actually "
+         "earned."
          "<br><br>Track: <strong>Market Intelligence</strong>.")
     note("Built for the <strong>Sectors Hackathon 2026</strong>, on the Sectors "
          "Financial API. The brief was to do something useful with Indonesian "

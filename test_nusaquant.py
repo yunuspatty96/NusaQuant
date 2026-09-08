@@ -725,6 +725,12 @@ check("about page covers the method",
                                 "How the models were trained",
                                 "Cached snapshot and Live mode")),
       "a section is missing")
+# Claims about what other products do are unsupportable and undo the one
+# thing this project has: a README that only says what it can show.
+_overclaims = ("almost never", "nobody tells", "no one tells", "unlike other")
+check("no unsupportable claims about other products",
+      not any(c in _about.lower() for c in _overclaims),
+      next((c for c in _overclaims if c in _about.lower()), ""))
 check("about page credits the authors",
       "Patty Kyoudai" in _about and "Yunus Patty" in _about
       and "Lukas Patty" in _about)
