@@ -1060,10 +1060,17 @@ def render_income_chart(company: dict) -> None:
 
     detail = ("Cost of revenue" if cost_label == "Cost of revenue"
               else "Operating expense")
-    note(f"Cost is shown as <strong>{escape(detail.lower())}</strong> "
-         f"for this company — issuers that do not file a cost of revenue, banks "
-         f"among them, are charted on operating expense instead, and the label "
-         f"says which.")
+    # Three bars in a row invite the reading that the third is the difference
+    # between the first two. It is not, and the gap is large: ICBP's revenue
+    # less cost is 6.8T against net income of 1.1T. Saying so is cheaper than
+    # letting every reader work it out or, worse, not notice.
+    note(f"<strong>Revenue less cost is gross profit, not net income.</strong> "
+         f"Salaries, marketing, interest and tax come out after that, which is "
+         f"why the third bar is smaller than the gap between the first two."
+         f"<br><br>Cost is shown here as "
+         f"<strong>{escape(detail.lower())}</strong>. Companies that do not "
+         f"report a cost of revenue, banks among them, are charted on "
+         f"operating expense instead.")
 
 
 def render_momentum_charts(prices: pd.DataFrame) -> None:

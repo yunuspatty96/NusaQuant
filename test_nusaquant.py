@@ -84,6 +84,18 @@ check("every meaning says more than a single clause",
       all(len(f.meaning) > 70 for f in nq.FEATURE_SCHEMA),
       ", ".join(f.label for f in nq.FEATURE_SCHEMA if len(f.meaning) <= 70))
 
+# Nothing a reader sees should mention how the thing was built. An absence
+# reason once told them to run a training command to fix it.
+_facing = ([f.meaning for f in nq.FEATURE_SCHEMA]
+           + list(nq.FEATURE_ABSENCE_REASON.values())
+           + list(nq.TOOLTIPS.values())
+           + [str(v) for v in nq.EXPLANATIONS.values()])
+_leaked = [t for t in _facing
+           if re.search(r"API |train\.py|--\w+|screener|endpoint|parquet"
+                        r"|joblib|CLI ", t)]
+check("no developer detail in anything the reader sees",
+      not _leaked, _leaked[0][:90] if _leaked else "")
+
 check("bank-only ratios are not listed",
       not any(f.name in ("npl", "ldr", "nim") for f in nq.FEATURE_SCHEMA))
 # A screener snapshot must never reach training. Feeding today's trailing yield

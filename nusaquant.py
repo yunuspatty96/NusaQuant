@@ -862,9 +862,8 @@ FEATURE_SCHEMA: tuple[FeatureSpec, ...] = (
                 "heavy for an industrial company and above 3 leaves little "
                 "room if earnings fall. Banks routinely run 5 to 8 because "
                 "customer deposits are liabilities, so the figure means "
-                "something entirely different there. The API does not "
-                "separate interest-bearing debt, so this is the broader "
-                "measure.",
+                "something entirely different there. It counts every "
+                "obligation, not only borrowings.",
                 "multiple", "Debt to Equity"),
 
     # — Profitability ---------------------------------------------
@@ -2558,9 +2557,10 @@ FEATURE_ABSENCE_REASON: dict[str, str] = {
     "ps": "Trailing 12-month revenue is zero or negative.",
     "pbv": "Book equity is zero or negative.",
     "pcf": "Trailing 12-month operating cash flow is zero or negative.",
-    "ev_ebitda": "Needs interest-bearing debt and positive EBITDA. Many filings "
-                 "report neither, and substituting total liabilities would make "
-                 "this a different ratio for banks than for miners.",
+    "ev_ebitda": "Needs borrowings reported separately and positive EBITDA. "
+                 "Most companies here report neither, and counting every "
+                 "liability instead would make this mean one thing for a bank "
+                 "and another for a miner.",
     "eps": "Needs trailing earnings and a share count.",
     "rps": "Needs trailing revenue and a share count.",
     "cps": "Cash is not reported for this period, or the share count is unknown.",
@@ -2576,11 +2576,11 @@ FEATURE_ABSENCE_REASON: dict[str, str] = {
     "npm": "Trailing 12-month revenue is zero or negative.",
     "gross_profit": "Not reported. Financial issuers do not file a cost of "
                     "revenue.",
-    "dividend": "No trailing dividend in the last screen. Either the company "
-                "pays none, or the universe has not been screened yet — run "
-                "`python train.py --screen`.",
+    "dividend": "No dividend on record for the past twelve months. The "
+                "company may pay none, or none has been reported here yet.",
     "dpr": "Needs a trailing dividend and positive earnings.",
-    "dividend_yield": "Needs a trailing dividend from the screener.",
+    "dividend_yield": "Needs a dividend on record for the past twelve "
+                      "months.",
     "ebitda": "Not reported for this period.",
 }
 
