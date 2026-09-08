@@ -731,6 +731,13 @@ _overclaims = ("almost never", "nobody tells", "no one tells", "unlike other")
 check("no unsupportable claims about other products",
       not any(c in _about.lower() for c in _overclaims),
       next((c for c in _overclaims if c in _about.lower()), ""))
+# The rules require a one-sentence problem statement naming who the product is
+# for and what it solves. It was briefly lost when an overclaim was cut out of
+# the same paragraph.
+check("about page states the problem and the audience",
+      "The problem" in _about and "retail investors" in _about.lower()
+      and "researchers" in _about.lower(),
+      "no problem statement on the About page")
 check("about page credits the authors",
       "Patty Kyoudai" in _about and "Yunus Patty" in _about
       and "Lukas Patty" in _about)

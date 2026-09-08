@@ -1451,10 +1451,15 @@ def render_about(models: dict, metadata: dict) -> None:
     # most widely published figures in finance — and an unsupportable claim
     # about other products is the last thing a project built on measured
     # honesty should lead with.
-    note("<strong>Who this is for.</strong> Retail investors and researchers "
-         "on the IDX who want to know how much a holding is likely to move, "
-         "and want to be told how much confidence that estimate has actually "
-         "earned."
+    note("<strong>The problem.</strong> NusaQuant is for retail investors and "
+         "researchers on the Indonesia Stock Exchange who need to know how "
+         "much a holding is likely to move — and how much confidence that "
+         "estimate has actually earned."
+         "<br><br>A probability with no tested record behind it cannot be "
+         "weighed: it looks identical whether it was validated or invented. "
+         "Every figure here carries the score it earned on periods it had "
+         "never seen, including the forecast that failed and is labelled as "
+         "such rather than quietly dropped."
          "<br><br>Track: <strong>Market Intelligence</strong>.")
     note("Built for the <strong>Sectors Hackathon 2026</strong>, on the Sectors "
          "Financial API. The brief was to do something useful with Indonesian "

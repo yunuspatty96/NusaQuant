@@ -1,7 +1,13 @@
 # NusaQuant
 
-**Every forecast here reports how well it was tested. One of them failed the
-test, and it says so on the page.**
+> **Problem statement.** NusaQuant is for retail investors and researchers on
+> the Indonesia Stock Exchange who need to know how much a holding is likely
+> to move — and how much confidence that estimate has actually earned.
+
+A probability with no tested record behind it cannot be weighed: it looks
+identical whether it was validated or invented. NusaQuant attaches the
+out-of-sample score to every figure it publishes, including the forecast that
+failed its test and is labelled as such rather than quietly dropped.
 
 An IDX research dashboard built entirely on the
 [Sectors Financial API v2](https://docs.sectors.app/). It forecasts how much a
