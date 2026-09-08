@@ -417,7 +417,8 @@ try:
     _spec.loader.exec_module(appmod)
 except Exception:
     pass
-for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_PORTFOLIO):
+for _mode in (appmod.MODE_SINGLE, appmod.MODE_PICKS, appmod.MODE_PORTFOLIO,
+              appmod.MODE_ABOUT):
     _probe = AppTest.from_file(str(WORK / "app.py"), default_timeout=240)
     _probe.run()
     radio(_probe, "Analysis").set_value(_mode).run()
@@ -710,6 +711,37 @@ if _analyse:
     check("portfolio swing is written as plus-minus",
           str(_labels.get("Typical swing in a year", "")).startswith("\u00b1"),
           str(_labels.get("Typical swing in a year")))
+
+# The About page explains the method, so it is the worst possible place for a
+# figure that has drifted. Every number on it is read from the artifacts as it
+# renders; these checks confirm it renders and speaks in words a reader knows.
+radio(at, "Analysis").set_value(appmod.MODE_ABOUT).run()
+check("about page opens", not at.exception,
+      str(at.exception)[:300] if at.exception else "")
+_about = " ".join(m.value for m in at.markdown)
+check("about page covers the method",
+      all(h in _about for h in ("What NusaQuant is", "Who built it",
+                                "The models", "How it is validated",
+                                "How the models were trained",
+                                "Cached snapshot and Live mode")),
+      "a section is missing")
+check("about page credits the authors",
+      "Patty Kyoudai" in _about and "Yunus Patty" in _about
+      and "Lukas Patty" in _about)
+_model_table = [d.value for d in at.dataframe
+                if "Question the model answers" in list(d.value.columns)]
+check("about page reads the models rather than quoting them",
+      _model_table and len(_model_table[0]) >= 2,
+      "no model table rendered")
+if _model_table:
+    # Candidate names are how train.py refers to them, not how a reader does.
+    check("about page names algorithms in words",
+          not any("xgb_" in str(v) or "_l2" in str(v)
+                  for v in _model_table[0]["Algorithm"]),
+          str(list(_model_table[0]["Algorithm"])))
+    check("about page names model inputs in words",
+          not any("_" in str(v) for v in _model_table[0]["Inputs"]),
+          str(list(_model_table[0]["Inputs"]))[:120])
 
 check("ENTIRE DEMO = 0 API CALLS", CALLS["n"] == 0, f"{CALLS['n']}")
 

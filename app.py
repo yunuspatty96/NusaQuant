@@ -97,6 +97,7 @@ UNIVERSE_SIZE_HELP = ("How many companies to include, counting down from the "
 MODE_SINGLE = "Single Stock Analysis"
 MODE_PICKS = "Machine Learning Screening"
 MODE_PORTFOLIO = "Portfolio Analysis"
+MODE_ABOUT = "About Us"
 
 #: Plotly options shared by every chart. The mode bar is left at its default,
 #: which reveals it on hover rather than parking it permanently over the plot,
@@ -580,7 +581,8 @@ def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
             st.caption(f"About {CREDITS_PER_COMPANY} credits per company analysed.")
 
         st.divider()
-        mode = st.radio("Analysis", [MODE_SINGLE, MODE_PICKS, MODE_PORTFOLIO],
+        mode = st.radio("Analysis",
+                        [MODE_SINGLE, MODE_PICKS, MODE_PORTFOLIO, MODE_ABOUT],
                         label_visibility="collapsed")
 
         st.divider()
@@ -1359,6 +1361,333 @@ def render_risk_analysis(prices: pd.DataFrame, window: str, risks: dict,
         st.plotly_chart(figure, width="stretch", config=CHART_CONFIG)
 
 
+#: Every Sectors v2 endpoint this project calls, and what it is called for.
+#: Kept beside the About page rather than in a comment somewhere, because a
+#: reader asking "what data is this built on" deserves the actual list.
+SECTORS_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
+    ("companies/", "Universe screen",
+     "The listed companies above the market-cap floor, with the cap itself, "
+     "their IDX sector, sub-sector and industry, and trailing dividend "
+     "figures. One credit covers up to 200 companies at once."),
+    ("company/report/{ticker}/", "Company overview",
+     "Name, market capitalisation and last close for a single company. Used "
+     "in Live mode, where there is no cached snapshot to read them from."),
+    ("financials/quarterly/{ticker}/", "Quarterly financials",
+     "The income statement, balance sheet and cash flow items every ratio on "
+     "this site is computed from. One credit per quarter requested."),
+    ("daily/{ticker}/", "Daily price history",
+     "Open, high, low, close, volume and market cap per trading day. The "
+     "endpoint returns at most 90 days per call, so a five-year window is "
+     "fetched in consecutive chunks."),
+    ("subsectors/", "Sub-sector list",
+     "The IDX sub-sector names, used to group companies against their peers."),
+)
+
+
+#: Candidate names are how train.py refers to them; nobody reading an About
+#: page should meet "xgb_depth1".
+ALGORITHM_LABELS: dict[str, str] = {
+    "xgb_depth1": "Gradient boosting, depth 1",
+    "xgb_depth2": "Gradient boosting, depth 2",
+    "logistic_l2": "Logistic regression, L2",
+    "logistic_l2_strong": "Logistic regression, strong L2",
+}
+
+
+def _about_models(models: dict) -> pd.DataFrame:
+    """What each shipped model is, and what it scored, read from the file."""
+    rows = []
+    for horizon, question in (
+            ("risk_6m", "Will this company swing more than the median one, over 6 months?"),
+            ("risk_12m", "Will this company swing more than the median one, over 12 months?"),
+            ("6m", "Will the price be higher in 6 months?"),
+            ("12m", "Will the price be higher in 12 months?")):
+        artifact = models.get(horizon)
+        if not artifact:
+            continue
+        metrics = artifact.get("validation_metrics", {})
+        rows.append({
+            "Question the model answers": question,
+            "Algorithm": ALGORITHM_LABELS.get(artifact.get("model_name"),
+                                              artifact.get("model_name", "—")),
+            "Inputs": ", ".join(nq.input_label(f)
+                                for f in artifact.get("feature_names", [])),
+            "Tested accuracy": nq._to_float(metrics.get("roc_auc")),
+            "Periods tested": artifact.get("validation_folds", 0),
+            "Rows tested on": metrics.get("n", 0),
+            "Verdict": ("Measurable edge" if artifact.get("has_edge")
+                        else "No measurable edge"),
+        })
+    return pd.DataFrame(rows)
+
+
+def render_about(models: dict, metadata: dict) -> None:
+    """Everything a reader might reasonably ask about how this was built."""
+    section(MODE_ABOUT)
+
+    tickers = metadata.get("n_tickers") or len(snapshot_tickers())
+    rows = metadata.get("dataset_rows") or 0
+    as_of = metadata.get("snapshot_as_of") or snapshot_as_of()
+
+    st.markdown("#### What NusaQuant is")
+    note(f"A research dashboard for the Indonesia Stock Exchange, built on "
+         f"{tickers} of the largest listed companies. It reads their filings "
+         f"and price history, computes {len(nq.METRIC_NAMES)} fundamental "
+         f"metrics from the raw statements, and puts two machine learning "
+         f"questions to the same data: how much a share is likely to move, and "
+         f"which way."
+         f"<br><br>It answers the first and reports honestly that it cannot "
+         f"answer the second. That is the whole design. A dashboard that only "
+         f"showed what worked would leave you no way to judge how hard it "
+         f"looked, so both results are on the page, each labelled with what it "
+         f"actually scored when tested on periods it had never seen.")
+
+    st.markdown("#### Who built it")
+    note("<strong>Patty Kyoudai</strong><br>Yunus Patty<br>Lukas Patty")
+
+    st.markdown("#### Why it exists")
+    note("Built for the <strong>Sectors Hackathon 2026</strong>, on the Sectors "
+         "Financial API. The brief was to do something useful with Indonesian "
+         "market data; the answer here is to be useful and honest at the same "
+         "time, which turned out to be the harder constraint. Every claim on "
+         "this site is one the code can reproduce, and the figures below are "
+         "read from the trained models as this page loads rather than typed "
+         "in, so they cannot drift away from what actually ships.")
+
+    st.markdown("#### The data behind it")
+    note(f"Everything comes from the <strong>Sectors Financial API v2</strong> "
+         f"({nq.API_BASE_URL}). Five endpoints are used:")
+    st.dataframe(pd.DataFrame([
+        {"Endpoint": path, "Used for": name, "What it gives": detail}
+        for path, name, detail in SECTORS_ENDPOINTS]),
+        width="stretch", hide_index=True, column_config={
+            "Endpoint": st.column_config.TextColumn(width="medium"),
+            "Used for": st.column_config.TextColumn(width="small"),
+            "What it gives": st.column_config.TextColumn(width="large")})
+    note(f"The universe is every company with a market capitalisation above "
+         f"<strong>{metadata.get('universe_filter', 'IDR 1 trillion')}</strong>, "
+         f"taken largest first. The screener returns its list alphabetically "
+         f"whatever order is requested, so the market cap is read back from "
+         f"each screen and the ordering is applied here.")
+
+    st.markdown("#### The three views")
+    for title, purpose, outputs in (
+        (MODE_SINGLE,
+         "One company end to end. Use it when you have a name in mind and want "
+         "to understand it rather than compare it.",
+         [("Price history", "Line or candlestick with MA20 and MA50, support "
+           "and resistance drawn from prices the stock has turned at before, "
+           "and the projected range shaded behind it. Drag to zoom."),
+          ("Projected range", "How far the price could travel in 6 and 12 "
+           "months, from its own volatility. A range, never a direction: it "
+           "says how far, not which way."),
+          ("Technical Indicators", "RSI and MACD over the same window. "
+           "Descriptive of what has happened."),
+          ("Trend & Momentum", "Where the price sits against its 20- and "
+           "50-day averages, its distance from the 52-week high, and its 6- "
+           "and 12-month returns."),
+          ("Market Conditions", "A 52-week range strip with today's price "
+           "marked, plus volume and movement measured against this stock's "
+           "own normal rather than against the market."),
+          ("Income Statement", "Revenue and cost as bars, gross profit and "
+           "net income as lines, per quarter. Revenue less cost is gross "
+           "profit — the salaries, interest and tax that separate it from net "
+           "income are why the lines sit apart."),
+          ("Fundamentals", "All 27 metrics grouped by category, each with "
+           "what it means and a reference level to judge it against."),
+          ("Risk Analysis", "The volatility forecast for both horizons with "
+           "what each scored when tested, then the measured history: "
+           "volatility, worst drawdown, downside volatility, turnover."),
+          ("Return Forecast", "The probability the price ends higher, at both "
+           "horizons. A probability, not a return: 53% means a 53% chance of "
+           "being higher, not a 53% gain.")]),
+        (MODE_PICKS,
+         "The whole universe in one sortable table. Use it to find candidates "
+         "rather than to study one name.",
+         [("Rank", "Ordered by the volatility forecast, calmest first. That is "
+           "the only estimate on the page that beat chance out of sample, so "
+           "it is the only ordering resting on something tested."),
+          ("High Volatility Probability", "The chance a company swings more "
+           "than the median one over the horizon you chose."),
+          ("Risk Class", "High, Medium or Low — the company's position among "
+           "all companies on file, not an absolute scale."),
+          ("Realised Volatility (1Y)", "What it actually did over the past "
+           "year, with no model involved."),
+          ("Positive Return Probability", "The return estimate, shown but not "
+           "ranked on."),
+          ("Trend and Data Quality", "The trend state, and the share of the "
+           "model's inputs actually present for that company this period.")]),
+        (MODE_PORTFOLIO,
+         "What a set of holdings does together. This is the one view no "
+         "single-stock page can replace, because diversification is not a "
+         "property any holding has on its own.",
+         [("Total value and swing", "What the portfolio is worth, and how much "
+           "it moves in a typical year."),
+          ("Diversification", "The weighted average swing of the parts against "
+           "the swing of the whole. The gap is what holding several things "
+           "bought you."),
+          ("Projected range", "For each position and for the portfolio. The "
+           "per-position ranges should not be added: all of them hitting their "
+           "worst case in the same window is far less likely than any one "
+           "doing so."),
+          ("Volatility and Return Forecast", "Both estimates per holding, the "
+           "same two the stock page shows."),
+          ("Sector Proportion", "Where the money actually sits."),
+          ("Correlation Matrix", "How closely each pair moves together. Green "
+           "means they move as one, which diversifies you least.")])):
+        with st.expander(title):
+            note(f"<strong>{purpose}</strong>")
+            st.dataframe(pd.DataFrame(
+                [{"Section": a, "What it shows and how to read it": b}
+                 for a, b in outputs]),
+                width="stretch", hide_index=True, column_config={
+                    "Section": st.column_config.TextColumn(width="small"),
+                    "What it shows and how to read it":
+                        st.column_config.TextColumn(width="large")})
+
+    st.markdown("#### The models")
+    frame = _about_models(models)
+    if not frame.empty:
+        st.dataframe(frame, width="stretch", hide_index=True, column_config={
+            "Question the model answers": st.column_config.TextColumn(width="large"),
+            "Algorithm": st.column_config.TextColumn(width="small"),
+            "Inputs": st.column_config.TextColumn(width="medium"),
+            "Tested accuracy": st.column_config.NumberColumn(format="%.3f"),
+            "Periods tested": st.column_config.NumberColumn(format="%d"),
+            "Rows tested on": st.column_config.NumberColumn(format="%d"),
+            "Verdict": st.column_config.TextColumn(width="small")})
+    note(f"Four models, each chosen per horizon from four candidates — two "
+         f"gradient-boosted trees and two L2 logistic regressions — on "
+         f"out-of-sample log loss, with rank quality breaking ties. Tested "
+         f"accuracy is ROC-AUC: pick a company that swung and one that did "
+         f"not, and it is how often the model gave the higher figure to the "
+         f"one that swung. 0.50 is a coin toss, and a model must clear "
+         f"<strong>{nq.MIN_EDGE_AUC:.2f}</strong> before this site will "
+         f"describe it as having an edge at all.")
+
+    st.markdown("#### How it is validated")
+    note("<strong>Purged walk-forward, never a random split.</strong> One fold "
+         "per quarterly rebalance. The model is fitted only on rows whose own "
+         "forward window had already closed before the quarter it is scored "
+         "on, so a 12-month target observed in June 2022 is withheld from any "
+         "fold validating June 2023. A random split on a price panel lets the "
+         "model see future market regimes, which is how a backtest looks "
+         "excellent and fails live."
+         "<br><br><strong>Scored within each fold, never pooled.</strong> The "
+         "share of stocks that rose in a given quarter ranges from 0 to 1 "
+         "across this panel. Pool the folds and a model emitting one constant "
+         "per quarter — no ranking whatsoever — scores 0.57, because the "
+         "constants happen to sort good quarters above bad ones. Scored inside "
+         "each quarter that same model gets exactly 0.500, which is the truth "
+         "about it."
+         f"<br><br><strong>Point-in-time throughout.</strong> A filing is "
+         f"treated as unknown for {nq.REPORTING_LAG_DAYS} days after its "
+         f"reporting date, because that is roughly when it reaches the public. "
+         f"A nine-point leakage audit runs on every training run and blocks "
+         f"the export if any check fails.")
+
+    st.markdown("#### What each model reads")
+    note(f"<strong>Volatility models</strong> read four inputs: "
+         f"{', '.join(nq.input_label(f) for f in nq.RISK_FEATURE_NAMES)}. "
+         f"Nearly all of the skill is in the first — a company that has been "
+         f"moving lately tends to keep moving — and the honest way to say that "
+         f"is that dropping it collapses the score to near chance."
+         f"<br><br><strong>Return models</strong> read scale-free ratios only. "
+         f"Of {len(nq.FEATURE_NAMES)} eligible, those missing for more than "
+         f"{nq.MAX_FEATURE_MISSINGNESS:.0%} of the panel are dropped, and the "
+         f"rest must clear an information coefficient of "
+         f"{nq.MIN_FEATURE_IC} — the average within-quarter correlation "
+         f"between the ratio and the return that followed. That bar is set "
+         f"from the panel's own noise floor: a column of random numbers scores "
+         f"about 0.05 here, so anything below it is indistinguishable from "
+         f"noise."
+         f"<br><br>Rupiah amounts are never model inputs. A bank with IDR "
+         f"1,600T of assets and a small cap with IDR 2T are not on one scale, "
+         f"and a model splitting on the level is splitting on company size "
+         f"rather than on value. Dividend figures are shown but never "
+         f"modelled: they are current readings rather than point-in-time "
+         f"history, so feeding them to a 2022 observation would be "
+         f"look-ahead.")
+
+    st.markdown("#### Calculations that are not machine learning")
+    note("<strong>Projected range.</strong> A volatility cone: the stock's own "
+         "daily volatility over the trailing year, scaled to the horizon by "
+         "the square-root-of-time rule, then widened by a multiplier measured "
+         "on this project's own panel rather than taken from a textbook. "
+         "Checked by projecting every past observation and counting how often "
+         "the price landed inside."
+         "<br><br><strong>Support and resistance.</strong> Swing highs and "
+         "lows clustered by proximity, each cluster compared against its "
+         "anchor rather than its last member — chaining comparisons produces "
+         "one meaningless level spanning the entire price range."
+         "<br><br><strong>Portfolio risk.</strong> Volatility from the "
+         "covariance of daily returns across holdings, aligned on the dates "
+         "every holding traded. The diversification benefit is the weighted "
+         "average of the parts less the volatility of the whole."
+         "<br><br><strong>Reliability score.</strong> Rank quality, "
+         "calibration against a prior-only baseline, and fold-to-fold "
+         "stability. A model that cannot rank is refused a stability credit, "
+         "so it cannot accumulate a reassuring label on consistency alone.")
+
+    st.markdown("#### How the models were trained")
+    note(f"<strong>1. Collect.</strong> The screener returns the universe; "
+         f"each company's quarterly filings and daily prices are fetched once "
+         f"and cached to disk. A crashed run resumes where it stopped, and "
+         f"each half of a company is banked as it arrives so nothing already "
+         f"paid for is thrown away."
+         f"<br><br><strong>2. Build.</strong> Filings are de-cumulated where a "
+         f"company reports year-to-date, aligned to prices with the "
+         f"{nq.REPORTING_LAG_DAYS}-day lag, and turned into one observation "
+         f"per company per quarter. The current panel is "
+         f"<strong>{rows:,} observations across {tickers} companies</strong>."
+         f"<br><br><strong>3. Validate.</strong> Every candidate is measured on "
+         f"the purged folds, the leakage audit runs, and a failure blocks the "
+         f"export rather than warning about it."
+         f"<br><br><strong>4. Shrink.</strong> The winning model's probability "
+         f"is pulled toward the base rate by a weight fitted leave-one-fold-"
+         f"out on log loss, so a model that cannot separate winners from "
+         f"losers is not permitted to say 85%."
+         f"<br><br><strong>5. Export.</strong> Models are written to disk with "
+         f"their full validation record attached. Re-training from the cache "
+         f"costs nothing and needs no API key.")
+
+    st.markdown("#### Cached snapshot and Live mode")
+    note(f"<strong>Cached snapshot</strong> is the default and costs nothing. "
+         f"It runs the entire dashboard on real Sectors data collected during "
+         f"training and stored on disk, labelled with the date it was taken "
+         f"— currently <strong>{as_of}</strong>. It is real market data, but "
+         f"it is not today's market, and the page says so rather than letting "
+         f"you assume otherwise."
+         f"<br><br><strong>Live Sectors API</strong> fetches the current "
+         f"figures for any listed company, including those outside the stored "
+         f"universe, and costs credits per company. Every screen that spends "
+         f"them shows the estimate before you press the button."
+         f"<br><br>The same code computes a feature in both modes. That is why "
+         f"the shared logic lives in one file: a ratio computed one way in "
+         f"training and another at inference would serve the model inputs that "
+         f"mean something different from what it learned.")
+
+    st.markdown("#### What we hope it answers")
+    note("For a <strong>researcher</strong>: a reproducible panel with the "
+         "validation attached. Every figure states what it scored, on how many "
+         "periods, and against what baseline. The negative results are on the "
+         "page beside the positive ones, which is what makes the positive ones "
+         "worth reading."
+         "<br><br>For an <strong>investor</strong>: an honest answer to how "
+         "much a holding is likely to move, which is the question this data "
+         "can actually answer, alongside the fundamentals to judge it by and "
+         "a portfolio view showing what your holdings do together rather than "
+         "one at a time."
+         "<br><br>For <strong>both</strong>: somewhere that says plainly when "
+         "it does not know. Direction of return over six to twelve months was "
+         "tested here every way the data allowed and could not be predicted. "
+         "Reporting that is more useful than a confident number would have "
+         "been, because a confident number you cannot check is worse than no "
+         "number at all.")
+
+    disclaimer()
+
+
 def render_single_stock(companies: pd.DataFrame, models: dict, controls: dict) -> None:
     section(MODE_SINGLE)
     if companies.empty:
@@ -2088,6 +2417,11 @@ def main() -> None:
         # and every size control on the page says "largest first". It now
         # carries a market cap, so the claim can be made true here too.
         companies = nq.by_market_cap(companies)
+
+    if controls["mode"] == MODE_ABOUT:
+        render_about(models, metadata)
+        footer()
+        return
 
     if controls["mode"] == MODE_SINGLE:
         render_single_stock(companies, models, controls)

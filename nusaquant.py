@@ -1407,6 +1407,25 @@ MIN_RISK_CROSS_SECTION = 8           # companies needed before a quarter can ran
 RISK_FEATURE_NAMES: list[str] = ["vol_3m", "der", "dist_52w_high", "reversal_1m"]
 
 
+#: Readable names for the inputs computed from price bars. The ratios get
+#: theirs from FEATURE_SCHEMA; these have no spec because they come from bars
+#: rather than filings, and "vol_3m" on a page for investors is a column name
+#: escaping into the product.
+PRICE_INPUT_LABELS: dict[str, str] = {
+    "vol_3m": "Volatility over the last 3 months",
+    "dist_52w_high": "Distance from the 52-week high",
+    "reversal_1m": "The last month's price move",
+}
+
+
+def input_label(name: str) -> str:
+    """What to call a model input in front of a reader."""
+    spec = FEATURE_BY_NAME.get(name)
+    if spec is not None:
+        return spec.expansion or spec.label
+    return PRICE_INPUT_LABELS.get(name, name.replace("_", " ").capitalize())
+
+
 def price_features(prices: pd.DataFrame, position: int) -> dict[str, float]:
     """Price-derived features as they stood at one bar, and no later.
 

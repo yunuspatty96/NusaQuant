@@ -9,8 +9,8 @@ protocol, against the same 0.55 threshold.
 
 | Question | Out-of-sample ROC-AUC | Verdict |
 |---|---|---|
-| Will this company swing more than the typical one? | **0.699** at 6M, **0.675** at 12M | measurable edge |
-| Will its price be higher in six or twelve months? | 0.515 and 0.487 | no measurable edge |
+| Will this company swing more than the typical one? | **0.676** at 6M, **0.690** at 12M | measurable edge |
+| Will its price be higher in six or twelve months? | 0.520 and 0.443 | no measurable edge |
 
 The first is what the dashboard ranks on, because it is the only ordering here
 that rests on something tested. The second is still on the page, labelled for
@@ -43,7 +43,7 @@ taken.
 
 ## What it costs
 
-**Cloning this repository costs nothing.** `data/cache/` holds 31 companies
+**Cloning this repository costs nothing.** `data/cache/` holds 34 companies
 and `models/` holds the four trained artifacts, both committed, so the whole
 dashboard runs offline at zero credits. The figures below are what it costs to
 build a snapshot from an empty cache, which only matters if you want a
@@ -156,7 +156,7 @@ row forever. They are documented here rather than listed in the dashboard.
 
 ## What the dashboard shows
 
-Three views, chosen in the sidebar.
+Four views, chosen in the sidebar.
 
 **Single Stock Analysis** — one company end to end: profile, price history,
 momentum, trend, income statement and every metric.
@@ -179,6 +179,13 @@ would be more volatile than the *median* company; thresholding the raw
 probability at 0.60 called 20 of 31 companies High, which cannot be true of a
 median split. The comparison group is the whole universe rather than the rows
 on screen, so the band means the same thing at a universe size of 5 as at 31.
+
+**About Us** — what this is, who built it, which Sectors endpoints it calls,
+what every view shows and how to read it, and the full methodology: each
+model, what it reads, what it scored and how it was validated. Every figure on
+that page is read from the trained artifacts as it renders rather than typed
+in, because a page explaining the method is the worst place for a number that
+has drifted since the last retrain.
 
 **Portfolio Analysis** — enter what you hold, in lots, and the whole thing is
 measured together: value, how much it swings, its deepest fall, a projected
@@ -240,9 +247,9 @@ Volatilities print as ±30.9%. A standard deviation is a distance, never a
 minus, and set bare beside a drawdown of -42.9% it reads as a return.
 
 **Candlestick needs an open.** Measured across the cache, high and low are
-present on essentially every bar for all 31 companies — it is the opening
-price that is sparse, and it is sparse in the way thin trading makes it: 17 of
-31 companies carry an open on fewer than half their bars, and MPRO on a tenth
+present on essentially every bar for all 34 companies — it is the opening
+price that is sparse, and it is sparse in the way thin trading makes it: 18 of
+34 companies carry an open on fewer than half their bars, and MPRO on a tenth
 of them. The toggle is offered either way and says plainly when it has to fall
 back to the line.
 
@@ -427,9 +434,9 @@ set.
 
 | | 6 months | 12 months |
 |---|---:|---:|
-| ROC-AUC | 0.699 | 0.675 |
+| ROC-AUC | 0.676 | 0.690 |
 | Purged folds | 8 | 4 |
-| Out-of-sample rows | 237 | 118 |
+| Out-of-sample rows | 255 | 126 |
 
 Both ship, each labelled with its own score, and they are not equally well
 established. The 12-month window consumes twice the history and is left with
@@ -453,13 +460,13 @@ them out costs nothing measurable: 0.666 with them, 0.666 without.
 
 ## What the current snapshot actually measures
 
-On the shipped 31-ticker snapshot, **neither horizon has a measurable edge**:
+On the shipped 34-ticker snapshot, **neither horizon has a measurable edge**:
 
 | | 6M | 12M |
 |---|---:|---:|
 | Purged folds | 9 | 5 |
-| Out-of-sample rows | 266 | 147 |
-| ROC-AUC (mean within fold) | 0.515 | 0.487 |
+| Out-of-sample rows | 286 | 157 |
+| ROC-AUC (mean within fold) | 0.520 | 0.443 |
 | Baseline ROC-AUC | 0.500 | 0.500 |
 | Beats the prior-only baseline on log loss | yes, by 0.0019 | no |
 | Reliability | No measurable edge | No measurable edge |
@@ -511,8 +518,8 @@ tested — feature screening, `scale_pos_weight`, a 24-point hyperparameter
 grid, a peer-relative target — moved the score by less than that standard
 error, and threshold choices inside those interventions move it by as much as
 the interventions themselves. Widening the universe was tried and did not help
-either: the panel grew 15 → 19 → 22 → 25 → 31 companies and 6M
-out-of-sample ROC-AUC went 0.470, 0.483, 0.516, 0.521, 0.499. **More quarters per company**, not more
+either: the panel grew 15 → 19 → 22 → 25 → 31 → 34 companies and 6M
+out-of-sample ROC-AUC went 0.470, 0.483, 0.516, 0.521, 0.499, 0.520. **More quarters per company**, not more
 companies, is what buys additional folds and therefore additional precision.
 
 ## Limitations
