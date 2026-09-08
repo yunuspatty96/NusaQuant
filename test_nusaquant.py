@@ -462,6 +462,20 @@ check("the drop is not written as plus-minus",
 
 # The return estimates are demoted, not deleted: a test that found nothing is
 # still a result, and removing it would leave nothing to judge the rest by.
+# "53%" beside a price invites reading it as a 53% gain, which is the single
+# most expensive misreading available on this page.
+_prose = " ".join(m.value for m in at.markdown)
+check("the return figures say they are probabilities, not returns",
+      "probabilities, not returns" in _prose.lower(),
+      "the Return Forecast note no longer says what the number is")
+# The trend badge names the pair the trend is actually computed from.
+# The precise regression: the old pair described as the trend's basis. The
+# words "200-day" on their own are fine — the tooltip explains why the slower
+# average was dropped, and that sentence should survive.
+check("the trend names the averages it uses",
+      "20- and 50-day" in _prose and "50- and 200-day" not in _prose,
+      "trend copy still describes the old moving-average pair")
+
 check("both return horizons kept on the page",
       {"6M Positive Return Probability",
        "12M Positive Return Probability"} <= set(labels),

@@ -182,8 +182,8 @@ on screen, so the band means the same thing at a universe size of 5 as at 31.
 
 **Portfolio Analysis** — enter what you hold, in lots, and the whole thing is
 measured together: value, how much it swings, its deepest fall, a projected
-range for each position and for the portfolio, and how closely the holdings
-move with one another.
+range for each position and for the portfolio, both forecasts per holding, and
+how closely the holdings move with one another.
 
 That last part is why the view exists. Diversification is not a property any
 individual holding has — it only appears between them, so no stock page can

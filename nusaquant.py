@@ -2652,10 +2652,12 @@ TOOLTIPS: dict[str, str] = {
 
     # — technical state —
     "trend":
-        "Price against its own 50- and 200-day averages. Above both is an "
-        "uptrend and below both a downtrend; above the 50 but under the 200 is "
-        "recovering, and the reverse is weakening. Descriptive of what the "
-        "price has done, not a forecast.",
+        "Price against its own 20- and 50-day averages. Above both is an "
+        "uptrend and below both a downtrend; above the 20 but under the 50 is "
+        "recovering, and the reverse is weakening. The shorter pair is used "
+        "because a 200-day average needs 200 sessions before it says anything, "
+        "and a third of this universe has not traded that long. Descriptive of "
+        "what the price has done, not a forecast.",
     "rsi":
         "Relative Strength Index over 14 days, on Wilder's smoothing. Above 70 "
         "is conventionally read as overbought and below 30 as oversold, with "

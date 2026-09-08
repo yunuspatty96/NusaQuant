@@ -700,8 +700,8 @@ def render_chart(company: dict, api_key: str,
         colour = trend_colour(nq.trend_position(trend))
         trend_slot.markdown(
             f"<span class='nq-trend' style='background:{colour}'>{escape(trend)}</span>"
-            f"<span class='nq-trend-note'>price against its own 50- and "
-            f"200-day averages</span>", unsafe_allow_html=True)
+            f"<span class='nq-trend-note'>price against its own 20- and "
+            f"50-day averages</span>", unsafe_allow_html=True)
 
     if prices.empty:
         st.info("No price history available for this window.")
@@ -1192,10 +1192,15 @@ def render_return_forecast(predictions: dict, models: dict) -> None:
     numbers rather than to the layout.
     """
     section("Return Forecast")
-    note("Tested on past periods, these fundamentals sorted risers above "
-         "fallers <strong>no better than chance</strong>. Kept on the page "
-         "because a negative result is still a result. Read each figure as the "
-         "historical frequency of a rise, not as a view on this company.")
+    note("<strong>These are probabilities, not returns.</strong> 53% means an "
+         "estimated 53% chance the price is higher than today in six months. "
+         "It says nothing about how much higher \u2014 a 53% reading is not a "
+         "53% gain."
+         "<br><br>Tested on past periods, these fundamentals separated risers "
+         "from fallers no better than chance would have. The figures stay on "
+         "the page because a negative result is still a result, but read them "
+         "as how often shares in this market have risen, not as a view on this "
+         "company.")
 
     for column, horizon in zip(st.columns(2), nq.HORIZON_TRADING_DAYS):
         months = "6" if horizon == "6m" else "12"
@@ -1782,6 +1787,7 @@ def render_portfolio(companies: pd.DataFrame, models: dict, controls: dict) -> N
     render_portfolio_summary(analysis)
     render_portfolio_projection(analysis, prices)
     render_portfolio_risk(analysis, models, controls)
+    render_portfolio_return(analysis, models, controls)
     render_portfolio_mix(analysis)
     disclaimer()
 
@@ -1921,6 +1927,56 @@ def render_portfolio_risk(analysis: dict, models: dict, controls: dict) -> None:
          "Risk Class is its position among all companies on file. "
          "<strong>Volatility is not direction.</strong>")
     st.dataframe(ordered, width="stretch", hide_index=True, column_config=config)
+
+
+def render_portfolio_return(analysis: dict, models: dict, controls: dict) -> None:
+    """The return probabilities for each holding, with their honest label.
+
+    Same shape as the volatility table above it, and the same caveat: this is
+    the chance a price ends higher, not the size of the move, and the model
+    behind it did not beat chance out of sample. It is here because a reader
+    comparing holdings should see the same two estimates the stock page shows
+    them, including the one that failed.
+    """
+    horizons = {h: models.get(h) for h in nq.HORIZON_TRADING_DAYS if models.get(h)}
+    if not horizons:
+        return
+    section("Return Forecast")
+
+    rows = []
+    for ticker in analysis["tickers"]:
+        record = {"Ticker": ticker}
+        for name in horizons:
+            record[name] = np.nan
+        try:
+            company = load_company(ticker, controls["api_key"], controls["offline"])
+            features = with_price_features(company["features"], company["prices"])
+            for name, artifact in horizons.items():
+                result = predict(features, artifact, name)
+                if result.get("available"):
+                    record[name] = result["probability"] * 100
+        except nq.SectorsAPIError:
+            pass
+        rows.append(record)
+
+    frame = pd.DataFrame(rows)
+    table = {"Ticker": frame["Ticker"].to_numpy()}
+    config = {"Ticker": st.column_config.TextColumn(width="small",
+                                                    help=nq.TOOLTIPS["ticker"])}
+    for name in horizons:
+        months = 6 if name == "6m" else 12
+        label = f"{months}M Positive Return Probability"
+        table[label] = frame[name].to_numpy()
+        config[label] = st.column_config.NumberColumn(
+            format="%.0f%%", help=nq.TOOLTIPS["probability"])
+
+    note("<strong>Probabilities, not returns.</strong> 53% means an estimated "
+         "53% chance the price is higher than today at the horizon \u2014 not a "
+         "53% gain. Tested on past periods these fundamentals separated risers "
+         "from fallers no better than chance, so read them as how often shares "
+         "in this market have risen rather than as a view on your holdings.")
+    st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True,
+                 column_config=config)
 
 
 def render_portfolio_mix(analysis: dict) -> None:
