@@ -1,10 +1,47 @@
 # NusaQuant © 2026 Patty Kyoudai
 
-**IDX machine-learning intelligence dashboard that ranks Indonesian stocks
-by the machine learning model's estimated probability of a positive return
-over 6 and 12 months.**
+**An IDX research dashboard that forecasts how much a share is likely to move,
+ranks the market on it, and reports plainly that it could not forecast which
+way.**
 
-Data: [Sectors Financial API v2](https://docs.sectors.app/). Model: XGBoost.
+Two questions were put to the same data, through the same purged walk-forward
+protocol, against the same 0.55 threshold.
+
+| Question | Out-of-sample ROC-AUC | Verdict |
+|---|---|---|
+| Will this company swing more than the typical one? | **0.699** at 6M, **0.675** at 12M | measurable edge |
+| Will its price be higher in six or twelve months? | 0.515 and 0.487 | no measurable edge |
+
+The first is what the dashboard ranks on, because it is the only ordering here
+that rests on something tested. The second is still on the page, labelled for
+what it is. A test that found nothing is a result, and removing it would leave
+a reader no way to judge the one that found something.
+
+Every figure above is printed by `python train.py --offline`, which needs no
+API key and spends nothing.
+
+Data: [Sectors Financial API v2](https://docs.sectors.app/). Models: gradient
+boosting and L2 logistic regression, one chosen per horizon on out-of-sample
+log loss.
+
+---
+
+## See it
+
+<!-- Replace with your Streamlit Cloud URL once deployed. -->
+**Live dashboard:** _not yet deployed_ · **Deployment steps:** [DEPLOY.md](DEPLOY.md)
+
+<!-- Save a PNG as docs/screenshot.png, then delete the two comment markers
+     around the line below so the image renders. It is left commented until
+     the file exists, because a broken image icon on the front page is worse
+     than no image at all.
+
+     Suggested shot: Single Stock Analysis on a volatile name — BYAN or BREN —
+     scrolled so the price chart and the Risk Analysis section are both in
+     frame. That one view carries the product's whole argument.
+
+![NusaQuant — Single Stock Analysis](docs/screenshot.png)
+-->
 
 > **DISCLAIMER!** NusaQuant provides quantitative analysis to support research
 > and decision-making. Model probabilities, forecasts, and other analyses are
@@ -12,15 +49,17 @@ Data: [Sectors Financial API v2](https://docs.sectors.app/). Model: XGBoost.
 > and do not constitute financial advice. You are solely responsible for your
 > own decisions and assume all associated risks.
 
-**Deployment steps: see [DEPLOY.md](DEPLOY.md).**
-
----
-
 ## What it costs
+
+**Cloning this repository costs nothing.** `data/cache/` holds 31 companies
+and `models/` holds the four trained artifacts, both committed, so the whole
+dashboard runs offline at zero credits. The figures below are what it costs to
+build a snapshot from an empty cache, which only matters if you want a
+different universe.
 
 | | Credits |
 |---|---:|
-| Training (one time, ~13 companies) | ~495 |
+| Fresh collection, 38 credits per company | ~495 for 13 |
 | Universe screen (`--screen`): sector, sub-sector, industry, dividends | 1 |
 | Re-training (`--offline`), deployment, demo | **0** |
 | Live analysis of a company outside the snapshot | ~9 |
@@ -39,7 +78,7 @@ nusaquant.py      API client, cache, features, targets, risk, explanations
 train.py          CLI: collect -> validate -> train -> export
 requirements.txt
 DEPLOY.md         deployment steps + credit costs
-models/           model_6m_xgb.joblib, model_12m_xgb.joblib, metadata.json
+models/           four models — return and volatility, 6M and 12M — plus metadata.json
 data/cache/       one parquet pair per company (the snapshot)
 ```
 
@@ -56,7 +95,7 @@ pip install -r requirements.txt
 export SECTORS_API_KEY=your-key-here
 
 python train.py --dry-run      # see the plan and cost, spend nothing
-python train.py                # ~495 credits, once
+python train.py                # only to extend the universe
 python train.py --screen       # sector + trailing dividends, 1 credit
 python train.py --offline      # re-train from data/cache/ — no key, no network
 streamlit run app.py           # 0 credits

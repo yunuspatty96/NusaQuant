@@ -60,11 +60,18 @@ Contoh keluaran:
 
 ```
 Budget              : 600 credits (100 reserved for the dashboard)
+Quarters per company: 16
 Cost per company    : 16 quarters + 22 price = 38 credits
-Universe size       : 13 companies
+Already cached      : 31 companies (free)
+New to buy          : 13 companies
+Universe size       : 44 companies
 ESTIMATED SPEND     : ~495 credits
-Expected dataset    : ~117 rows
 ```
+
+Perhatikan baris **Already cached**: perusahaan yang sudah ada di
+`data/cache/` tidak dibeli ulang, jadi angka ESTIMATED SPEND hanya untuk yang
+baru. Kalau Anda meng-clone repo ini dan tidak ingin memperluas universe,
+lewati langkah 4 sepenuhnya dan langsung ke `--offline`.
 
 ---
 
