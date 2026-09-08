@@ -1,96 +1,82 @@
-# NusaQuant © 2026 Patty Kyoudai
+# NusaQuant
 
-**An IDX research dashboard that forecasts how much a share is likely to move,
-ranks the market on it, and reports plainly that it could not forecast which
-way.**
+**Investors are told what a share might return. They are almost never told how
+much it will move on the way, or how confident anyone actually is. NusaQuant
+answers the question the data can answer, and says plainly when it cannot
+answer the one everybody asks.**
 
-Two questions were put to the same data, through the same purged walk-forward
+An IDX research dashboard built entirely on the
+[Sectors Financial API v2](https://docs.sectors.app/). It forecasts how much a
+share is likely to move, ranks the market on that, and reports — on the page,
+not in a footnote — that it could not forecast which way.
+
+| | |
+|---|---|
+| **Track** | Market Intelligence |
+| **Team** | Patty Kyoudai — Yunus Patty, Lukas Patty |
+| **Live** | **[nusaquant.streamlit.app](https://nusaquant.streamlit.app)** |
+| **Data** | Sectors Financial API v2, five endpoints, no other source |
+| **Universe** | 34 IDX companies · 427 quarterly observations · 23 rebalances |
+
+---
+
+## The two questions
+
+Both were put to the same data, through the same purged walk-forward
 protocol, against the same 0.55 threshold.
 
 | Question | Out-of-sample ROC-AUC | Verdict |
 |---|---|---|
-| Will this company swing more than the typical one? | **0.676** at 6M, **0.690** at 12M | measurable edge |
-| Will its price be higher in six or twelve months? | 0.520 and 0.443 | no measurable edge |
+| Will this company swing more than the median one? | **0.676** at 6M · **0.690** at 12M | measurable edge |
+| Will its price be higher in 6 or 12 months? | 0.520 and 0.443 | no measurable edge |
 
 The first is what the dashboard ranks on, because it is the only ordering here
-that rests on something tested. The second is still on the page, labelled for
-what it is. A test that found nothing is a result, and removing it would leave
-a reader no way to judge the one that found something.
+resting on something tested. The second stays on the page, labelled for what
+it is. A test that found nothing is still a result, and removing it would
+leave a reader no way to judge the one that found something.
 
 Every figure above is printed by `python train.py --offline`, which needs no
 API key and spends nothing.
 
-Data: [Sectors Financial API v2](https://docs.sectors.app/). Models: gradient
-boosting and L2 logistic regression, one chosen per horizon on out-of-sample
-log loss.
+---
+
+## Why this is not a stock tip generator
+
+The rules ask that products not provide financial advice, and that is also the
+honest engineering position here. Three things are built in rather than
+promised:
+
+- **A model that cannot rank is not allowed to sound confident.** Below an
+  out-of-sample ROC-AUC of 0.55 the reliability label becomes
+  *No measurable edge*, and the probability is shrunk toward the historical
+  base rate by a weight fitted leave-one-fold-out.
+- **Probabilities are labelled as probabilities.** 53% means a 53% chance the
+  price is higher, not a 53% gain — stated under every figure, because that is
+  the most expensive misreading available.
+- **Nothing places an order.** The product analyses, screens and scores. It
+  never executes.
 
 ---
 
-## See it
-
-**Live dashboard: [nusaquant.streamlit.app](https://nusaquant.streamlit.app)**
-· Deployment steps: [DEPLOY.md](DEPLOY.md)
-
-It opens in **Cached snapshot** mode, so it runs the whole flow on real
-Sectors data at zero credits and says on screen which date the snapshot was
-taken.
-
-> **DISCLAIMER!** NusaQuant provides quantitative analysis to support research
-> and decision-making. Model probabilities, forecasts, and other analyses are
-> estimates and may be inaccurate; they are not guarantees of future outcomes
-> and do not constitute financial advice. You are solely responsible for your
-> own decisions and assume all associated risks.
-
-## What it costs
-
-**Cloning this repository costs nothing.** `data/cache/` holds 34 companies
-and `models/` holds the four trained artifacts, both committed, so the whole
-dashboard runs offline at zero credits. The figures below are what it costs to
-build a snapshot from an empty cache, which only matters if you want a
-different universe.
-
-| | Credits |
-|---|---:|
-| Fresh collection, 38 credits per company | ~495 for 13 |
-| Universe screen (`--screen`): sector, sub-sector, industry, dividends | 1 |
-| Re-training (`--offline`), deployment, demo | **0** |
-| Live analysis of a company outside the snapshot | ~9 |
-
-The dashboard ships in **Cached snapshot** mode: it runs the whole flow on the
-real Sectors data collected during training, at zero credits, labelled with the
-date the snapshot was taken.
-
----
-
-## Files
-
-```
-app.py            Streamlit dashboard
-nusaquant.py      API client, cache, features, targets, risk, explanations
-train.py          CLI: collect -> validate -> train -> export
-requirements.txt
-DEPLOY.md         deployment steps + credit costs
-models/           four models — return and volatility, 6M and 12M — plus metadata.json
-data/cache/       one parquet pair per company (the snapshot)
-```
-
-Three Python files. The shared logic lives in `nusaquant.py` because both
-`train.py` and `app.py` must compute a feature *identically* — otherwise the
-model is served inputs that mean something different from what it learned.
-
----
-
-## Quick start
+## Run it
 
 ```bash
 pip install -r requirements.txt
-export SECTORS_API_KEY=your-key-here
+streamlit run app.py          # 0 credits, no API key needed
+```
 
-python train.py --dry-run      # see the plan and cost, spend nothing
-python train.py                # only to extend the universe
-python train.py --screen       # sector + trailing dividends, 1 credit
-python train.py --offline      # re-train from data/cache/ — no key, no network
-streamlit run app.py           # 0 credits
+**Cloning this repository costs nothing.** `data/cache/` holds 34
+companies and `models/` holds four trained artifacts, both committed, so the
+whole dashboard runs offline. An API key is needed only to extend the universe
+or to analyse a company outside the snapshot.
+
+```bash
+export SECTORS_API_KEY=your-key-here
+python train.py --dry-run     # see the plan and cost, spend nothing
+python train.py --screen      # universe, classification, dividends — 1 credit
+python train.py               # extend the universe
+python train.py --offline     # re-train from cache — no key, no network
+python test_nusaquant.py      # 147 checks, no network, no credits
 ```
 
 The API key is read from the environment. It appears in no source file, is
@@ -98,446 +84,235 @@ never written to disk, never logged, and is sent only in a request header.
 
 ---
 
+## The data behind it
+
+Everything comes from the Sectors Financial API v2. Remove it and there is no
+product: every metric, every model input, every chart and the entire cached
+snapshot derive from these five endpoints.
+
+| Endpoint | Used for | What it gives |
+|---|---|---|
+| `companies/` | Universe screen | Companies above the market-cap floor, with the cap itself, IDX sector / sub-sector / industry, and trailing dividends. One credit covers 200 companies. |
+| `company/report/{ticker}/` | Company overview | Name, market cap and last close, for Live mode where no snapshot exists. |
+| `financials/quarterly/{ticker}/` | Quarterly financials | The income statement, balance sheet and cash flow items every ratio is computed from. |
+| `daily/{ticker}/` | Daily price history | OHLC, volume and market cap per trading day, fetched in 90-day chunks. |
+| `subsectors/` | Sub-sector list | IDX sub-sector names, for grouping companies against peers. |
+
+Three details worth naming, because each was a bug first:
+
+- **The screener ignores `order_by`.** It is asked for `-market_cap` and
+  returns the list alphabetically. The market cap is read back from each
+  screen through `include_query_values` — it was already arriving and being
+  discarded — and the ordering is applied locally. Without this the next
+  companies bought are the ones beginning with A.
+- **`daily/` silently clamps** any window wider than 90 days to the most
+  recent 90, with no error. Long histories are fetched in consecutive chunks.
+- **Failed calls are not billed.** The credit meter refunds 4xx and 5xx rather
+  than counting them, so the budget reflects what Sectors actually charges.
+
+---
+
+## The four views
+
+**Single Stock Analysis** — one company end to end: price history with MA20
+and MA50, support and resistance, a calibrated projected range, RSI and MACD,
+a 52-week range strip, the income statement as bars and lines, all
+27 fundamentals with a reference level for each, then Risk
+Analysis and Return Forecast.
+
+**Machine Learning Screening** — the universe ranked by the volatility
+forecast, calmest first, with both estimates side by side and every column
+sortable. Risk Class places each company among all companies on file rather
+than on an absolute scale.
+
+**Portfolio Analysis** — holdings entered in lots. Value, volatility, worst
+drawdown, the diversification benefit, a projected range per position and for
+the whole, both forecasts per holding, sector proportion and the correlation
+matrix. This is the one view no per-stock page can replace: diversification is
+not a property any holding has alone.
+
+**About Us** — the method in full, with every figure read from the trained
+artifacts as the page renders rather than typed in.
+
+---
+
+## The models
+
+| Question | Algorithm | Inputs | ROC-AUC | Folds | Rows | Verdict |
+|---|---|---:|---:|---:|---:|---|
+| Volatility, 6M | Gradient boosting, depth 1 | 4 | **0.676** | 8 | 255 | edge |
+| Volatility, 12M | Logistic regression, L2 | 4 | **0.690** | 4 | 126 | edge |
+| Return, 6M | Gradient boosting, depth 2 | 5 | 0.520 | 9 | 286 | none |
+| Return, 12M | Gradient boosting, depth 1 | 5 | 0.443 | 5 | 157 | none |
+
+Each is chosen per horizon from four candidates — two gradient-boosted trees
+and two L2 logistic regressions — on out-of-sample log loss, with rank quality
+breaking ties inside a tolerance of 0.005. Ties are declared generously
+because heavily shrunk candidates separate on noise in the fourth decimal
+while their ROC-AUCs still differ by real margins.
+
+**Volatility models read four inputs**: trailing 3-month volatility, debt to
+equity, distance from the 52-week high, and last month's move. Nearly all the
+skill sits in the first — drop it and the score falls to near chance — and
+saying so is more useful than implying something cleverer.
+
+**Return models read scale-free ratios only.** Of 11
+eligible, those missing for more than 30% of the
+panel are dropped, and survivors must clear an information coefficient of
+0.06. That bar comes from the panel's own noise floor: a column
+of random numbers scores about 0.05 here, measured by permutation, so anything
+below it cannot be told from noise.
+
+Rupiah amounts are never inputs — a model splitting on the level splits on
+company size rather than value. Dividend figures are shown but never modelled,
+because they are current readings rather than point-in-time history.
+
+---
+
 ## The metrics
 
-Twenty-seven metrics in seven categories. Twenty-four are reconstructed
-point-in-time from the cached snapshot at zero credits; the three dividend
-figures are a screener snapshot. Only the scale-free point-in-time ratios are
-machine learning model inputs; the rest are shown because a reader wants them.
+27 metrics in 7 categories, all reconstructed point-in-time from the cached filings at zero credits except the three dividend figures, which are a screener snapshot and are therefore shown but never modelled.
 
-| Category | Metrics | Model input |
+| Category | Metrics | Model eligibility |
 |---|---|---|
-| Valuation | P/E, P/S, PBV, P/CF, EV/EBITDA | yes |
-| Per Share | EPS, RPS, CPS, BVPS, CFPS | no — rupiah amounts |
-| Solvency | DER | yes |
-| Profitability | ROA, ROE, GPM, OPM, NPM | yes |
-| Dividend | Dividend, DPR, Dividend Yield | no — screener snapshot |
-| Income Statement | Revenue, Gross Profit, EBITDA, Net Income | no — rupiah amounts |
-| Balance Sheet | Cash, Total Assets, Total Liabilities, Total Equity | no — rupiah amounts |
+| Valuation | P/E, P/S, PBV, P/CF, EV/EBITDA | eligible |
+| Per Share | EPS, RPS, CPS, BVPS, CFPS | shown only — rupiah amounts cannot be compared across companies |
+| Solvency | DER | eligible |
+| Profitability | ROA, ROE, GPM, OPM, NPM | eligible |
+| Dividend | Dividend, DPR, Dividend Yield | shown only — screener snapshot, not point-in-time |
+| Income Statement | Revenue, Gross Profit, EBITDA, Net Income | shown only — rupiah amounts cannot be compared across companies |
+| Balance Sheet | Cash, Total Assets, Total Liabilities, Total Equity | shown only — rupiah amounts cannot be compared across companies |
 
-**Rupiah amounts are never machine learning model inputs.** A bank with IDR 1,600T of assets and
-a small cap with IDR 2T are not on one scale, and a tree that splits on the
-level is splitting on company size rather than on value. Eleven scale-free
-ratios are eligible; the missingness gate then keeps whichever clear it, which
-on the current snapshot is six — P/E, P/CF, EV/EBITDA, GPM and OPM go, because
-financial issuers file neither a cost of revenue nor interest-bearing debt
-separately. `train.py` prints which survived and why.
-
-**Per-share figures need a share count**, which no field in the payload
-carries. It is market cap divided by close, which is exact on the day it is
-taken.
-
-**A ratio that is economically meaningless becomes `NaN`, never zero:** a P/E
-built on negative earnings is a category error, not a cheap stock. A negative
-ROE *is* meaningful and is kept.
-
-**A screener snapshot is never a model input.** `python train.py --screen`
-costs one credit and brings back IDX classification and trailing dividends for
-the whole universe. Those dividend figures are true as of the screen date and
-only then, so they are shown and never modelled: feeding today's yield to a
-2022 observation is look-ahead of exactly the kind the leakage audit exists to
-catch. They are written into the features frame by `app.py`, never by
-`compute_features`, because `compute_features` is the path the training set
-travels — and two tests assert that separation rather than trusting it.
-
-**`yield_ttm` of exactly zero means "no data", not "pays nothing".** Across the
-200-name screen, all 29 zero yields had a missing `dividend_ttm` beside them
-and none had a real one, and the list is BBNI, BBTN, CPIN, GEMS, HRUM — all
-routine payers. Printing 0.0% for them would state something untrue about a
-real company, so a zero without a dividend is read as unknown and shown as a
-dash.
-
-**Three ratios are absent on purpose.** NPL and LDR need gross loans and
-deposits, and NIM needs net interest income and earning assets. The quarterly
-financials endpoint returns none of them, so every company would show an empty
-row forever. They are documented here rather than listed in the dashboard.
+Only scale-free point-in-time ratios are eligible as inputs; the
+missingness gate and the information-coefficient screen then decide
+which of those actually reach a model. `train.py` prints both
+decisions on every run.
 
 ---
 
-## What the dashboard shows
+## How it is validated
 
-Four views, chosen in the sidebar.
+**Purged walk-forward, never a random split.** One fold per quarterly
+rebalance. A model is fitted only on rows whose forward window closed before
+the quarter it is scored on, so a 12-month target observed in June 2022 is
+withheld from any fold validating June 2023.
 
-**Single Stock Analysis** — one company end to end: profile, price history,
-momentum, trend, income statement and every metric.
+**Scored within each fold, never pooled.** The share of stocks that rose in a
+quarter ranges from 0 to 1 across this panel. Pooled, a model emitting one
+constant per quarter — no ranking whatsoever — scores 0.57, because the
+constants sort good quarters above bad ones. Scored inside each quarter that
+same model gets exactly 0.500, which is the truth about it.
 
-**Machine Learning Screening** — every company in the universe, ranked, with
-both estimates side by side.
+**Point-in-time throughout.** A filing is unknown for
+90 days after its reporting date. A nine-point leakage
+audit runs on every training run and blocks the export if any check fails.
 
-The ranking is on the 6-month volatility forecast, calmest first, and that is
-the honest basis rather than the flattering one: it is the only estimate on
-the page that beat chance out of sample, so it is the only ordering resting on
-something tested. Ranking by the return probability would look more like a
-stock tip while sorting the table by a model that was measured and found not
-to work. Every column sorts on click, so a reader who wants a different order
-can take one.
+**Feature screening happens inside every fold.** Screening once on the whole
+panel and hardcoding the winners scores better and is worth nothing: the
+ratios would have been chosen using the returns the model is then graded
+against.
 
-Each horizon also carries a Risk Class — High, Medium or Low — from where the
-company sits among all companies on file. The band is a position rather than a
-fixed threshold because the model was trained to answer whether a company
-would be more volatile than the *median* company; thresholding the raw
-probability at 0.60 called 20 of 31 companies High, which cannot be true of a
-median split. The comparison group is the whole universe rather than the rows
-on screen, so the band means the same thing at a universe size of 5 as at 31.
+**58 commits since 2026-09-05**, and a test suite of 147 checks that
+runs with no network and no credits — including one asserting the entire demo
+makes zero API calls.
 
-**About Us** — what this is, who built it, which Sectors endpoints it calls,
-what every view shows and how to read it, and the full methodology: each
-model, what it reads, what it scored and how it was validated. Every figure on
-that page is read from the trained artifacts as it renders rather than typed
-in, because a page explaining the method is the worst place for a number that
-has drifted since the last retrain.
+---
 
-**Portfolio Analysis** — enter what you hold, in lots, and the whole thing is
-measured together: value, how much it swings, its deepest fall, a projected
-range for each position and for the portfolio, both forecasts per holding, and
-how closely the holdings move with one another.
+## What was tried and did not work
 
-That last part is why the view exists. Diversification is not a property any
-individual holding has — it only appears between them, so no stock page can
-show it. On a six-stock sample the parts swing ±30.3% a year and the portfolio
-swings ±18.8%, and the two banks in it correlate at 0.56 while the least
-related pair sits at 0.10.
+Reported because a negative result is evidence, and because a repository that
+only shows what worked gives a judge no way to weigh it.
 
-Per-position ranges sit above the portfolio's own. They should not be added:
-every holding reaching its worst case in the same six months is far less
-likely than any one of them doing so, so the parts overstate the whole — on
-that sample by about 5% of the portfolio. The page states the portfolio figure
-and leaves that caution to the tooltip rather than spending three lines on it.
-
-This view replaced Sector Ranking, which listed the same ratios the stock page
-already showed, one sector at a time. A reader who had seen one view had seen
-the other.
-
-Every view ends with the disclaimer in a red-bordered box rather than a grey
-caption, because a caption is the first thing a reader's eye skips.
-
-Comparing inside a sector is still the point wherever ratios are read. This
-panel holds banks next to miners, and that mismatch is why gross margin and
-EV/EBITDA fail the missingness gate outright.
-
-The single-stock page runs in this order:
-
-| Section | What it is |
+| Idea | Result |
 |---|---|
-| Price history | Line or candlestick, MA20/MA50, support and resistance, the projected range, volume beneath |
-| Technical Indicators | RSI and MACD charted over the same window |
-| Projected range | A 6- and 12-month cone drawn from the stock's own volatility |
-| Technical state | Trend, RSI, MACD, distance from the 52-week high, 6/12-month returns |
-| Market Conditions | A 52-week range strip with today's price marked, plus volume and movement against the stock's own normal |
-| Income Statement | Revenue and cost as bars, gross profit and net income as lines, per quarter and de-cumulated |
-| Fundamental metrics | All twenty-seven, grouped by category |
-| Risk Analysis | The 6M and 12M volatility forecasts with what each scored, then measured volatility, drawdown, downside volatility and turnover |
-| Return outlook | The 6- and 12-month probabilities, under a heading that says the test found nothing |
-| Disclaimer | Boxed in red at the foot of every view |
+| Momentum, reversal, 52-week-high distance | Information coefficient 0.000 for 12-1 momentum. Nothing above the noise floor. |
+| OHLCV-derived features for direction | 6M best combination 0.514 against 0.500 for fundamentals alone — inside one standard error. 12M actively worse. |
+| Stratified K-Fold | +0.169 apparent gain, entirely look-ahead leakage. Rejected. |
+| SMOTE / class weighting | Classes are 53/47, not imbalanced. Moved the score in opposite directions at the two horizons. |
+| Fair value: ML multiple regression | PBV R² of −0.036 — worse than the mean. Cheap-versus-dear predicted returns with the wrong sign. |
+| Fair value: Graham, Gordon, DCF, peer multiples | Five methods disagreed by 36× on one company. Cheap half underperformed by up to 11.9%. |
+| Anomaly detection (isolation forest, LOF, elliptic) | Found real oddities, predicted nothing: +0.015 on returns against a 0.05 noise floor. |
+| Probability calibration (isotonic, Platt) | Both worse than the shrinkage already applied. |
+| More companies | Panel grew 15 → 19 → 22 → 25 → 31 → 34; 6M scores 0.470, 0.483, 0.516, 0.521, 0.499, 0.520. No trend. |
 
-Risk sits above return, and both live in one section each. That ordering is
-deliberate: the top of a page is read as the answer, and the return estimates
-cannot carry that weight. They are demoted rather than deleted, because a test
-that found nothing is still a result and removing it would leave a reader with
-no way to judge the estimate that did find something.
-
-Risk was two things before — a descriptive panel, and a proposal for a
-separate machine learning one. Two risk sections would have been a fair thing
-for a reader to find confusing, and the second would have largely restated the
-first, since the forecast's dominant input is the trailing volatility the
-history panel already shows. So there is one: what is expected, then what has
-happened.
-
-Volatilities print as ±30.9%. A standard deviation is a distance, never a
-minus, and set bare beside a drawdown of -42.9% it reads as a return.
-
-**Candlestick needs an open.** Measured across the cache, high and low are
-present on essentially every bar for all 34 companies — it is the opening
-price that is sparse, and it is sparse in the way thin trading makes it: 18 of
-34 companies carry an open on fewer than half their bars, and MPRO on a tenth
-of them. The toggle is offered either way and says plainly when it has to fall
-back to the line.
-
-**The projected range is measured, not assumed.** The cone is a volatility
-cone: the stock's own daily volatility over the trailing year, scaled to the
-horizon by the square-root-of-time rule, widened by a multiplier. The
-multipliers are not the textbook 1.00 and 2.00 — they were measured on this
-project's own cached panel by projecting every observation with a year of
-history behind it and checking what actually happened afterwards.
-
-A 6-month band drawn at 1.00 covered 66.7% against a theoretical 68.3%, which
-holds up. But 2.00 covered only 87.5% rather than 95.4%: IDX returns have far
-fatter tails than a bell curve, and a true 95% needs a multiplier near 3.7.
-
-**One band ships, at 50%.** The wider ones are correctly calibrated — split by
-volatility, the most volatile quarter of observations saw an 80% band catch
-74.9% at six months, so if anything it is narrow — but half this panel's
-12-month 80% ranges spanned more than five times bottom to top and MORA's
-spanned sixty-five. A range that wide is an accurate statement and a useless
-one, and printing it invited a reader to anchor on a number that meant nothing.
-The multipliers shipped are 0.65 at six months and 0.75 at twelve.
-
-A 50% range still runs wide for a volatile stock: MORA's twelve-month band
-spans 6.1x against a panel median of 2.1x. Anything past three times is
-labelled too broad to act on rather than quietly drawn narrower.
-
-The cone is deliberately symmetric around the last close. It says how far the
-price might travel, never which way — direction is the probability's job, and
-on this snapshot the probability does that job poorly.
-
-**Trading conditions are three readings, never one score.** Position in the
-52-week range, volume against the stock's own yearly average, and recent
-movement against the same. A composite would be read the way a fear-and-greed
-dial is read, so one was built and tested on this panel before deciding: its
-rank correlation with the following six months of return was +0.017, and the
-monotone pattern that appeared across its buckets came from SRAJ supplying a
-third of the extreme-greed observations while DSSA and BYAN contributed one
-commodity run. Split by company the pattern dissolves.
-
-Worse, the direction was backwards. A fear-and-greed dial is read
-contrarian — buy fear, sell greed — and on this panel greed preceded the
-better returns, so a reader applying the usual interpretation would have been
-doing the opposite of what the data showed. A dial carrying a number that means
-nothing is worse than no dial, because the shape is familiar enough to be
-believed. The three gauges carry no arrows and no colour for the same reason:
-being near a 52-week high is neither good nor bad.
-
-**Support and resistance are descriptive and have no horizon.** A level is
-drawn where several swing highs or lows cluster within 2% of each other, and
-the more swings it collected the more it is worth looking at. Swings are
-compared against each cluster's anchor rather than its last member: chaining
-off the last member let one BBCA "level" accumulate 75 touches while actually
-spanning 7,000 to 11,000, which is not a level. The lines mark where the price
-has stopped before, never where it will stop, and they are drawn across the
-history only — not projected forward.
-
-**Only the 50% band is drawn.** The 80% band is correctly calibrated — split by
-volatility, the most volatile quarter of observations saw it catch 74.9% at six
-months against a target of 80%, so it is if anything narrow — but half this
-panel's 12-month 80% ranges span more than five times bottom to top, and MORA's
-spans sixty-five. Shading that would stretch the axis until the price line
-became a flat scratch. It is tabulated instead, and a range wider than five
-times is labelled too broad to act on: an accurate statement about a very
-volatile stock is still a useless one to plan around.
-
-**The technical block is descriptive, never predictive**, and is deliberately
-kept out of the machine learning model. Momentum and volatility were tested as
-model features on this panel and did not earn a place. An arrow points up in
-green for bullish or oversold, down in red for bearish or overbought, and is
-absent and grey for neutral.
+The binding constraint is **measurement precision, not the algorithm**. With
+9 folds the standard error on the 6M ROC-AUC is about 0.043, so
+the interval straddles the 0.55 gate. More quarters per
+company buys folds; more companies does not.
 
 ---
 
-## Method
+## Calculations that are not machine learning
 
-**Classification, not price forecasting.** The product question is directional,
-so the model estimates `P(forward return > 0)`. A claim that can be checked
-against what happened, rather than a price target that mostly cannot.
+**Projected range** — a volatility cone: trailing daily volatility scaled by
+the square-root-of-time rule, widened by multipliers measured on this panel
+rather than taken from a textbook, then checked by projecting every past
+observation and counting how often the price landed inside.
 
-**Point-in-time alignment.** A statement dated 31 March was not public on
-31 March, so fundamentals are held back 90 days before becoming eligible:
+**Support and resistance** — swing highs and lows clustered by proximity, each
+compared against its cluster anchor rather than its last member. Chaining
+comparisons produces one meaningless level spanning the whole price range.
 
-```
-report date ──+90d──▶ available ──▶ next trading day ──▶ observation
-                                                             │
-                                                    +126 / +252 trading days
-                                                             ▼
-                                                        6M / 12M target
-```
+**Portfolio risk** — volatility from the covariance of daily returns across
+holdings, aligned on dates every holding traded. The diversification benefit
+is the weighted average of the parts less the volatility of the whole.
 
-Targets use trading-day offsets into each ticker's own price series, never
-calendar arithmetic, because IDX closes for weekends and many national
-holidays.
-
-**Cumulative filings are detected and corrected.** Indonesian issuers commonly
-file cumulative year-to-date income statements — Q4 is the full year. Summing
-four of those as standalone quarters overstates TTM revenue by roughly 2.5x.
-The basis is detected per company by comparing the level of the last quarter
-against Q1 (cumulative predicts Qn ≈ n × Q1, discrete predicts ≈ Q1).
-
-**Purged walk-forward validation, one fold per rebalance.** Expanding folds,
-each validating a single quarterly observation date. A 12-month target observed
-in June 2022 does not resolve until June 2023, so a row is admitted to training
-only once its own forward window has closed. Imputation and the rank transform
-sit inside the pipeline and refit per fold.
-
-Folding by rebalance rather than by calendar year is what makes the numbers
-mean anything here: yearly folds gave two validation folds at 6M and one at 12M,
-and a stability score computed across two numbers is not a measurement. Per
-rebalance there are nine and five.
-
-**Rank quality is averaged within folds, never pooled across them.** The share
-of stocks that rose over the following six months ranges from 0.00 to 1.00
-across the quarters in this panel. Pool the folds together and a model emitting
-one constant per quarter — the same number for every stock, no ranking at all —
-scores a pooled ROC-AUC of 0.57, because its constants happen to sort the good
-quarters above the bad ones. That is the market's direction leaking into a
-metric meant to measure stock selection. Scored inside each cross-section, the
-same model gets exactly 0.500.
-
-**Capacity is matched to the sample.** Measured on purged folds, the depth-3,
-250-tree configuration this project shipped in 0.2.0 reached an in-sample
-ROC-AUC of 0.79–0.86 against an out-of-sample 0.43. It was not learning the
-market; it was learning fifteen tickers. The candidates are now depth-1 and
-depth-2 trees and regularised logistic regression, all of which roughly halve
-that gap.
-
-**The model is selected, not assumed.** Every candidate is validated on the
-same folds and ranked on out-of-sample log loss — a proper scoring rule, so a
-confidently wrong model cannot win — with rank quality breaking ties inside
-0.005. `DummyClassifier(strategy="prior")` is always measured alongside, and
-`train.py` states plainly whether anything beat it.
-
-**Probabilities are shrunk toward the base rate.** The served number is
-`w × model + (1 − w) × prior`, with `w` fitted leave-one-fold-out on
-out-of-sample log loss. Blending is monotone, so the ranking never changes;
-only how far a probability may travel from the historical frequency does. On
-this panel `w` comes back at its floor, which is the honest answer rather than
-a disappointing one.
-
-**Reliability** = 40% normalised ROC-AUC + 25% normalised PR-AUC + 20%
-calibration + 15% stability, and each of those three qualifiers is doing work:
-
-- PR-AUC is normalised against the base rate, since a PR-AUC of 0.65 is
-  worthless when 65% of observations are positive.
-- Calibration is a Brier **skill score against the baseline's own out-of-sample
-  Brier**, not against `p(1−p)`. The latter is the score of a forecaster who
-  already knows the validation base rate — an oracle — and measured against it
-  even a perfectly honest model scores zero. That is why every calibration
-  component in the 0.2.0 artifacts read exactly 0.
-- Stability is withheld from a model that does not discriminate. A classifier
-  returning the same number for every stock has a fold-to-fold AUC standard
-  deviation of zero and would otherwise collect a perfect 100 for it.
-
-**A model with no measurable edge says so.** Below an out-of-sample ROC-AUC of
-0.55 the reliability label becomes *No measurable edge*, the probability band
-stops naming an edge it cannot demonstrate, and the screening view says
-plainly which of its two columns passed a test and which did not. A model cannot accumulate its way to a
-reassuring label on calibration and consistency alone; those describe a
-well-behaved forecast of the base rate, which is a different claim from a
-signal.
-
-**Anomaly detection was built, measured and removed.** An isolation forest
-fitted per horizon on that horizon's model features scored each company for
-how far outside the training range it sat, and it identified real oddities —
-MPRO's P/S is 4,480 robust deviations from the median, SRAJ's P/B is 42.
-
-It does not ship, because it does not forecast. On the same purged folds
-everything else uses, the score's within-quarter correlation with the
-following six months came out at +0.015 for returns and -0.019 for
-volatility, against a noise floor near 0.05; an elliptic envelope and a local
-outlier factor landed in the same place. It is recorded here rather than
-quietly dropped: anomaly detection is a familiar-sounding technique that would
-have been easy to present as an edge, and the tested answer is that on this
-panel it is not one.
-
-**Risk is forecast as well as measured.** Direction of return does not clear
-the gate on this panel; volatility does. "Will this company swing more than
-the typical company", scored on the same purged folds against the same 0.55
-threshold, clears it at both horizons — the only models here with `has_edge`
-set.
-
-| | 6 months | 12 months |
-|---|---:|---:|
-| ROC-AUC | 0.676 | 0.690 |
-| Purged folds | 8 | 4 |
-| Out-of-sample rows | 255 | 126 |
-
-Both ship, each labelled with its own score, and they are not equally well
-established. The 12-month window consumes twice the history and is left with
-half the folds, so its figure rests on much less. Publishing only the stronger
-one would have been the more flattering choice and would have hidden the thing
-a reader most needs in order to weigh them against each other.
-
-Two limits ship with it. Drop trailing volatility from the features and the
-score falls to 0.518, so nearly all of the skill is "volatile stays volatile"
-and the model adds little on top of one number. And the reliability label is
-still Weak, because the fold-to-fold variance is wide.
-
-Size, turnover and illiquidity are deliberately excluded despite scoring
-higher — illiquidity reaches an information coefficient of +0.22. This
-universe is the largest companies by market cap *today*, so a company that was
-small in 2023 and appears here in 2026 arrived by rising, and no test run from
-inside the panel can clear that, because every member is a survivor. Leaving
-them out costs nothing measurable: 0.666 with them, 0.666 without.
+**Reliability score** — rank quality, calibration against a prior-only
+baseline, and fold-to-fold stability. A model that cannot rank is refused a
+stability credit, so it cannot accumulate a reassuring label on consistency
+alone.
 
 ---
 
-## What the current snapshot actually measures
+## Cached snapshot and Live mode
 
-On the shipped 34-ticker snapshot, **neither horizon has a measurable edge**:
+**Cached snapshot** is the default and costs nothing. It runs the entire
+dashboard on real Sectors data collected during training, labelled with the
+date it was taken — currently **2026-06-30**. Real market data,
+but not today's market, and the page says so.
 
-| | 6M | 12M |
-|---|---:|---:|
-| Purged folds | 9 | 5 |
-| Out-of-sample rows | 286 | 157 |
-| ROC-AUC (mean within fold) | 0.520 | 0.443 |
-| Baseline ROC-AUC | 0.500 | 0.500 |
-| Beats the prior-only baseline on log loss | yes, by 0.0019 | no |
-| Reliability | No measurable edge | No measurable edge |
+**Live Sectors API** fetches current figures for any listed company, including
+those outside the stored universe. Every screen that spends credits shows the
+estimate before the button is pressed.
 
-That is reported, not hidden. The dashboard labels both horizons, shrinks the
-probabilities to within a few points of the base rate, and warns on the
-ranking view. The 6M log-loss win is left in the table rather than celebrated:
-0.0019 is smaller than `LOG_LOSS_TIE`, the margin this project already refuses
-to read as a difference anywhere else.
+The same code computes a feature in both modes. That is why the shared logic
+lives in one file: a ratio computed one way in training and another at
+inference would serve the model inputs meaning something different from what
+it learned.
 
-**Feature screening, and why it is done inside each fold.** Ratios that rank
-nothing are dropped before training. The screen keeps a ratio when its
-information coefficient — the within-quarter Spearman correlation against the
-return that followed, averaged over quarters — clears `MIN_FEATURE_IC`.
+---
 
-The screen is refitted on the training rows of every fold, which is the whole
-point of it. Screening once on the full panel and hardcoding the winners scores
-*better* on this data and is worth nothing: the ratios would have been chosen
-using the returns the model is then graded against. That was measured rather
-than assumed, and the honest version is not the flattering one: screening
-inside each fold is the only version whose score a live market could reproduce.
+## Files
 
-`MIN_FEATURE_IC` is set from the panel's own noise floor rather than from the
-literature. Hand this measurement a column of random numbers and it does not
-return zero — on a cross-section this narrow it returns |IC| near 0.05, with a
-95th percentile around 0.13 (400 permutations). The bar sits just above that
-median, so it removes ratios that are visibly worse than noise; it does not
-certify the survivors as signal. Of six ratios, only NPM and ROE clear the 95th
-percentile of the noise distribution at six months, and that is before any
-correction for having examined six.
+```
+app.py               Streamlit dashboard — four views
+nusaquant.py         API client, cache, features, targets, risk, explanations
+train.py             CLI: collect -> validate -> train -> export
+test_nusaquant.py    147 checks, synthetic API, zero network
+models/              four models plus metadata.json
+data/cache/          one parquet pair per company, plus the universe screen
+DEPLOY.md            deployment steps and credit costs
+```
 
-How little of this is resolvable is itself worth stating: moving the bar from
-0.05 to 0.06 moved the 6M score from 0.542 to 0.515. A 0.01 change in a
-threshold should not move a result by 0.027. That it does is the same finding
-as everything else on this page — the panel is too small for the measurement
-to hold still.
+Shared logic lives in `nusaquant.py` because `train.py` and `app.py` must
+compute a feature *identically*, or the model is served inputs that mean
+something different from what it learned.
 
-**Why the edge is still absent, and what would change it.** The target is the
-sign of an absolute return, and over 6–12 months that sign is mostly the
-market's, not the company's — the per-quarter base rate in this panel runs from
-0.00 to 1.00, and cross-sectional fundamentals carry no information about the
-market's own direction.
-
-The constraint is now **measurement precision, not the algorithm**. With 9
-folds the standard error on the 6M ROC-AUC is about 0.043, so the 95% interval
-around 0.542 runs from roughly 0.46 to 0.63 and straddles the 0.55 gate: the
-experiment cannot yet resolve whether the edge exists. Every intervention
-tested — feature screening, `scale_pos_weight`, a 24-point hyperparameter
-grid, a peer-relative target — moved the score by less than that standard
-error, and threshold choices inside those interventions move it by as much as
-the interventions themselves. Widening the universe was tried and did not help
-either: the panel grew 15 → 19 → 22 → 25 → 31 → 34 companies and 6M
-out-of-sample ROC-AUC went 0.470, 0.483, 0.516, 0.521, 0.499, 0.520. **More quarters per company**, not more
-companies, is what buys additional folds and therefore additional precision.
+---
 
 ## Limitations
 
-- **Survivorship bias.** The universe reflects securities that exist today, so
+- **Survivorship bias.** The universe reflects securities listed today, so
   companies delisted during the period are absent and performance is biased
-  upward.
-- **The reporting lag is assumed.** A flat 90 days stands in for real
-  publication dates, which the API does not reliably expose.
-- **Overlapping targets.** Consecutive observations share most of their forward
-  window, so the effective sample is smaller than the row count.
-- **Small dataset on a small budget.** ~340 rows across 25 companies cannot
-  support a strong claim, and on this snapshot it does not support one at all.
-- **The target carries the market.** See above — this caps how well any model
-  built only on cross-sectional fundamentals can score.
-- **Not a backtest.** No transaction costs, slippage or position sizing.
-- **One model across all sectors.** Banks and miners do not have comparable
-  balance sheets. The rank transform softens this; it does not fix it.
+  upward. This is why size and illiquidity are excluded from the risk model
+  despite scoring higher: on a universe selected by today's market cap, "small
+  predicts rising" is the selection rule read backwards.
+- **The reporting lag is assumed.** A flat 90 days stands
+  in for real publication dates.
+- **Overlapping targets.** Consecutive observations share most of their
+  forward window, so the effective sample is smaller than the row count.
+- **34 companies, 23 quarters.** Every conclusion here is
+  conditional on a panel this size.
 
 ---
 
@@ -545,13 +320,11 @@ companies, is what buys additional folds and therefore additional precision.
 
 NusaQuant provides quantitative analysis to support research and
 decision-making. Model probabilities, forecasts, and other analyses are
-estimates and may be inaccurate; they are not guarantees of future outcomes and
-do not constitute financial advice. You are solely responsible for your own
-decisions and assume all associated risks.
+estimates and may be inaccurate; they are not guarantees of future outcomes
+and do not constitute financial advice. You are solely responsible for your
+own decisions and assume all associated risks.
 
-Market data © [Sectors](https://sectors.app/), used under their API terms.
+---
 
-## Developer
-Patty Kyoudai
--Yunus Patty
--Lukas Patty
+NusaQuant © 2026 Patty Kyoudai · Yunus Patty · Lukas Patty
+Built for the Sectors Hackathon 2026.

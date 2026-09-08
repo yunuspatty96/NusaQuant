@@ -62,7 +62,7 @@ Contoh keluaran:
 Budget              : 600 credits (100 reserved for the dashboard)
 Quarters per company: 16
 Cost per company    : 16 quarters + 22 price = 38 credits
-Already cached      : 31 companies (free)
+Already cached      : 34 companies (free)
 New to buy          : 13 companies
 Universe size       : 44 companies
 ESTIMATED SPEND     : ~495 credits
@@ -202,47 +202,51 @@ Buka panel **Diagnostics** di aplikasi. Ia menyebutkan penyebabnya:
 
 ## Yang perlu Anda tahu sebelum demo
 
-Dengan snapshot 31 saham saat ini, **kedua horizon melaporkan "No measurable
-edge"** — bukan sekadar "Weak".
+Aplikasi ini menjalankan **empat model**, dan hanya dua di antaranya punya
+edge yang terukur. Itu disengaja dan ditampilkan apa adanya di layar.
 
-| | 6M | 12M |
-|---|---:|---:|
-| Fold walk-forward (di-purge) | 9 | 5 |
-| Baris out-of-sample | 266 | 147 |
-| ROC-AUC (rata-rata di dalam fold) | 0.515 | 0.487 |
-| Baseline (selalu menebak prior) | 0.500 | 0.500 |
-| Mengalahkan baseline (log loss)? | ya, selisih 0.0019 | tidak |
+| Pertanyaan | ROC-AUC | Fold | Baris | Putusan |
+|---|---:|---:|---:|---|
+| Lebih bergejolak dari median, 6 bulan | **0.676** | 8 | 255 | ada edge |
+| Lebih bergejolak dari median, 12 bulan | **0.690** | 4 | 126 | ada edge |
+| Harga lebih tinggi dalam 6 bulan | 0.520 | 9 | 286 | tidak ada edge |
+| Harga lebih tinggi dalam 12 bulan | 0.443 | 5 | 157 | tidak ada edge |
 
-Selisih 0.0019 itu sengaja tidak dirayakan: angkanya lebih kecil daripada
-`LOG_LOSS_TIE`, ambang yang di tempat lain sudah dianggap "tidak berbeda".
+Baseline "selalu menebak prior" ada di 0.500, dan ambang yang harus dilewati
+sebelum aplikasi ini mau menyebut sesuatu sebagai edge adalah 0.55.
 
-Itu bukan bug, dan bukan pula sesuatu yang disembunyikan. Aplikasi:
+**Prakiraan volatilitas** lolos, dan itulah yang dipakai untuk memeringkat
+Machine Learning Screening. Reliability-nya tetap **Weak** karena variasi
+antar-fold masih lebar, dan hampir seluruh kemampuannya berasal dari satu
+variabel: volatilitas tiga bulan terakhir. Perusahaan yang sedang bergejolak
+cenderung tetap bergejolak.
 
-- memberi label **No measurable edge** pada kedua horizon,
-- menyusutkan probabilitas ke arah base rate historis, sehingga sebarannya
-  hanya sekitar 2 poin persen (bukan 0.66 yang terdengar meyakinkan padahal
-  tidak tervalidasi),
-- dan pada **Machine Learning Screening** menyebut jelas kolom mana yang
-  lolos uji dan kolom mana yang tidak.
+**Prakiraan arah return tidak lolos**, di kedua horizon. Aplikasi:
 
-**Kenapa, dan apa yang akan mengubahnya.** Target model adalah tanda dari
+- memberi label **No measurable edge** pada keduanya,
+- menyusutkan probabilitasnya ke arah base rate historis, sehingga sebarannya
+  hanya beberapa poin persen,
+- dan menulis di bawah setiap angka bahwa itu **probabilitas, bukan return**:
+  53% berarti peluang 53% harganya lebih tinggi, bukan untung 53%.
+
+Ini bukan bug dan bukan kelemahan yang disembunyikan. Hasil negatif tetap
+sebuah hasil, dan menghapusnya justru menghilangkan cara pembaca menilai
+model yang berhasil.
+
+**Kenapa arah return tidak bisa diprediksi.** Targetnya adalah tanda dari
 *absolute return*, dan dalam 6–12 bulan tanda itu sebagian besar ditentukan
 arah pasar, bukan perusahaannya — base rate per kuartal di panel ini berkisar
 dari 0.00 sampai 1.00.
 
-Yang membatasi sekarang adalah **presisi pengukuran, bukan algoritmanya**.
-Dengan 9 fold, standard error ROC-AUC 6M sekitar 0.043, sehingga selang 95%
-di sekitar 0.515 membentang kira-kira 0.43–0.60 dan masih melewati ambang
-0.55. Artinya eksperimennya belum mampu menjawab apakah edge itu ada.
-
-Sebagai gambaran betapa tipisnya semua ini: menaikkan ambang IC dari 0.05 ke
-0.06 saja menggeser skor 6M dari 0.542 ke 0.515.
+Yang membatasi adalah **presisi pengukuran, bukan algoritmanya**. Dengan
+9 fold, standard error ROC-AUC 6M sekitar 0.043, sehingga selang 95%
+di sekitar 0.520 masih melewati ambang 0.55.
 
 Menambah jumlah saham sudah dicoba dan tidak menolong: panel tumbuh
-15 → 19 → 22 → 25 → 31 perusahaan, dan ROC-AUC 6M out-of-sample bergerak
-0.470, 0.483, 0.516, 0.521, 0.499. Yang menambah jumlah fold — dan karena itu
-menambah presisi — adalah **riwayat kuartal yang lebih panjang**, bukan nama
-yang lebih banyak:
+15 → 19 → 22 → 25 → 31 → 34 perusahaan, dan ROC-AUC 6M
+out-of-sample bergerak 0.470, 0.483, 0.516, 0.521, 0.499, 0.520. Yang
+menambah jumlah fold — dan karena itu menambah presisi — adalah **riwayat
+kuartal yang lebih panjang**, bukan nama yang lebih banyak:
 
 ```bash
 python train.py --budget 3000 --quarters 32
