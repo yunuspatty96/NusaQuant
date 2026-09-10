@@ -510,6 +510,26 @@ check("condition bands carry no direction",
           (nq.range_band(90), nq.range_band(10), nq.activity_band(2.0),
            nq.turbulence_band(2.0), nq.turbulence_band(0.5))))
 
+# The logo carries the wordmark, so the text title must go rather than sit
+# beside it. Both assets must also be committed, or the deployed app falls
+# back to plain text while the local one looks finished.
+_assets = SRC / "assets"
+check("logo assets ship with the repository",
+      (_assets / "nusaquant-logo.png").exists()
+      and (_assets / "nusaquant-mark.png").exists(),
+      "assets/ is missing a logo file")
+if (_assets / "nusaquant-logo.png").exists():
+    from PIL import Image as _Image
+    for _name in ("nusaquant-logo.png", "nusaquant-mark.png"):
+        _im = _Image.open(_assets / _name)
+        check(f"{_name} is transparent, not a white panel",
+              _im.mode == "RGBA" and _im.convert("RGBA").getpixel((0, 0))[3] == 0,
+              f"{_im.mode}, corner alpha "
+              f"{_im.convert('RGBA').getpixel((0, 0))[3]}")
+        check(f"{_name} is small enough to serve",
+              (_assets / _name).stat().st_size < 150_000,
+              f"{(_assets / _name).stat().st_size:,} bytes")
+
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")
 check("cached mode default", radio(at, "Data source").value == "Cached snapshot",

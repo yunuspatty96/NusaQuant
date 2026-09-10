@@ -99,6 +99,13 @@ MODE_PICKS = "Machine Learning Screening"
 MODE_PORTFOLIO = "Portfolio Analysis"
 MODE_ABOUT = "About Us"
 
+#: The logo, trimmed to its artwork and made transparent so it sits on the
+#: sidebar's grey as cleanly as on the white page. The mark alone is the
+#: favicon: the full lockup at 16px loses the wordmark entirely and keeps only
+#: a smear of the candlesticks either side.
+LOGO = Path(__file__).with_name("assets") / "nusaquant-logo.png"
+LOGO_MARK = Path(__file__).with_name("assets") / "nusaquant-mark.png"
+
 #: Plotly options shared by every chart. The mode bar is left at its default,
 #: which reveals it on hover rather than parking it permanently over the plot,
 #: and the buttons that do not apply to a time series are dropped. Drag to box
@@ -375,7 +382,8 @@ def load_company(ticker: str, api_key: str, offline: bool) -> dict[str, Any]:
 
 def configure_page() -> None:
     st.set_page_config(page_title="NusaQuant — IDX Machine Learning Market Intelligence",
-                       page_icon="◧", layout="wide")
+                       page_icon=str(LOGO_MARK) if LOGO_MARK.exists() else "◧",
+                       layout="wide")
     # Tabular figures: this dashboard is mostly numbers, and a column of
     # prices that does not align is harder to scan.
     st.markdown(f"""<style>
@@ -549,7 +557,13 @@ See **DEPLOY.md**.
 def render_sidebar(metadata: dict[str, Any]) -> dict[str, Any]:
     snapshot = snapshot_tickers()
     with st.sidebar:
-        st.markdown("### NusaQuant")
+        if LOGO.exists():
+            # st.logo places it in the chrome above the sidebar's own content,
+            # and swaps to the mark when the sidebar is collapsed.
+            st.logo(str(LOGO), size="large",
+                    icon_image=str(LOGO_MARK) if LOGO_MARK.exists() else None)
+        else:
+            st.markdown("### NusaQuant")
 
         if snapshot:
             source = st.radio("Data source", ["Cached snapshot", "Live Sectors API"],
@@ -2420,7 +2434,12 @@ def render_portfolio_mix(analysis: dict) -> None:
 
 def main() -> None:
     configure_page()
-    st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
+    # The logo carries the wordmark, so it replaces the title rather than
+    # sitting beside it — otherwise the name is written twice, an inch apart.
+    if LOGO.exists():
+        st.image(str(LOGO), width=210)
+    else:
+        st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
     # The subtitle used to promise probability estimates of positive returns,
     # which is the one thing the testing says this cannot do. Leading with it
     # made the honest labels further down read as a retraction.
