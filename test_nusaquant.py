@@ -526,9 +526,15 @@ if (_assets / "nusaquant-logo.png").exists():
               _im.mode == "RGBA" and _im.convert("RGBA").getpixel((0, 0))[3] == 0,
               f"{_im.mode}, corner alpha "
               f"{_im.convert('RGBA').getpixel((0, 0))[3]}")
+        # The guard exists to stop a 593 KB original being shipped, not to
+        # chase the smallest possible file: too small and the logo is upscaled
+        # on a retina screen, which is the failure this replaced.
         check(f"{_name} is small enough to serve",
-              (_assets / _name).stat().st_size < 150_000,
+              (_assets / _name).stat().st_size < 200_000,
               f"{(_assets / _name).stat().st_size:,} bytes")
+        check(f"{_name} survives a 3x display",
+              _im.size[0] >= 3 * (180 if "logo" in _name else 32),
+              f"{_im.size[0]}px asset is too small for the size it renders at")
 
 check("app runs with NO API key", not at.exception, str(at.exception)[:300] if at.exception else "")
 check("app made zero API calls", CALLS["n"] == 0, f"{CALLS['n']}")

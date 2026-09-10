@@ -2437,7 +2437,10 @@ def main() -> None:
     # The logo carries the wordmark, so it replaces the title rather than
     # sitting beside it — otherwise the name is written twice, an inch apart.
     if LOGO.exists():
-        st.image(str(LOGO), width=210)
+        # 180, against a 560px asset: crisp to 186 CSS px even on a 3x display.
+        # At 210 against the 400px asset this was being upscaled on any retina
+        # screen, which is what made it look broken.
+        st.image(str(LOGO), width=180)
     else:
         st.markdown('<div class="nq-title">NusaQuant</div>', unsafe_allow_html=True)
     # The subtitle used to promise probability estimates of positive returns,
