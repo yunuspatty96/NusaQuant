@@ -1,8 +1,9 @@
 # NusaQuant - IDX Machine Learning Market Intelligence
 
-> **Problem statement.** NusaQuant is for retail investors and researchers on
-> the Indonesia Stock Exchange who need to know how much a holding is likely
-> to move — and how much confidence that estimate has actually earned.
+> **Problem statement.** NusaQuant is built for investors and market analysts
+> who need to identify promising IDX stocks, understand what is driving them,
+> and assess their potential impact on a portfolio — all in one integrated
+> market-intelligence platform.
 
 A probability with no tested record behind it cannot be weighed: it looks
 identical whether it was validated or invented. NusaQuant attaches the
@@ -85,6 +86,61 @@ python test_nusaquant.py      # 147 checks, no network, no credits
 
 The API key is read from the environment. It appears in no source file, is
 never written to disk, never logged, and is sent only in a request header.
+
+---
+
+## NusaQuant Architecture
+
+Two pipelines, one implementation. The billed pipeline runs rarely and writes
+to disk; the free one runs on every page load and reads what the first wrote.
+
+```text
+  Sectors Financial API v2 — five endpoints, every call metered
+      │                                               │
+      │ one-off, billed                               │ opt-in, per session
+      ▼                                               │ (Live mode)
+  train.py                                            │
+      collect ─▶ point-in-time panel                  │
+              ─▶ missingness gate + IC screen         │
+              ─▶ leakage audit — fails, nothing ships │
+              ─▶ purged walk-forward, 4 candidates    │
+              ─▶ export the best per horizon          │
+      │                                               │
+      ▼                                               │
+  on disk, committed to the repository                │
+      data/cache/*.parquet    one pair per company    │
+      data/dataset.parquet    427 observations        │
+      models/*.joblib         four models             │
+      models/metadata.json    scores and as-of date   │
+      │                                               │
+      ▼                                               ▼
+  nusaquant.py — the one implementation of every feature, target,
+                 risk measure, model wrapper and explanation
+      │
+      ▼
+  app.py — Streamlit. Single Stock · Screening · Portfolio · About Us
+           models loaded once per process, reads memoised per view
+```
+
+**One implementation of every feature.** `train.py` and `app.py` compute
+nothing themselves; both call `nusaquant.py`. A ratio computed one way in
+training and another at inference would hand the model an input meaning
+something different from what it learned, and nothing downstream would report
+the discrepancy.
+
+**The cache is the boundary between billed and free.** Everything above
+`data/cache/` costs credits; everything below it is arithmetic on files
+already on disk. That is why the dashboard runs at zero cost, and why
+`python train.py --offline` re-trains the models with no key and no network.
+
+**Export is gated, not automatic.** The leakage audit runs before a single
+model is written, and one failed check ends the run with nothing exported. The
+artifacts in `models/` are the ones that passed, not the ones that finished.
+
+**The dashboard holds no state of its own.** Every figure it shows is read
+from `models/metadata.json` or recomputed from the cache as the page renders,
+so the page cannot drift away from the artifacts that shipped. Live mode adds
+requests, never a second source of truth.
 
 ---
 
